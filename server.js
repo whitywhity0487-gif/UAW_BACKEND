@@ -76,7 +76,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: `http://localhost:${PORT}`,
+        url:https://uaw-backend.vercel.app,
         description: "Local Development Server"
       }
     ],
@@ -137,34 +137,12 @@ app.get("/api/test", (req, res) => {
   });
 });
 
-/* ================================
-   ERROR HANDLER
-================================ */
 
-app.use((err, req, res, next) => {
-  console.error("Server Error:", err);
-  res.status(500).json({
-    success: false,
-    message: err.message || "Internal Server Error"
-  });
-});
 
-/* ================================
-   START SERVER
-================================ */
 
-app.listen(PORT, async () => {
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`${'='.repeat(50)}`);
-  console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
-  console.log(`📄 Swagger JSON: http://localhost:${PORT}/swagger.json`);
-  console.log(`🔍 Debug endpoints: http://localhost:${PORT}/api/debug-endpoints`);
-  console.log(`✅ Test endpoint: http://localhost:${PORT}/api/test`);
-  console.log(`${'='.repeat(50)}\n`);
   
   await initializeServices();
-  console.log(`✅ All services initialized successfully!\n`);
-});
+
+
 
 module.exports = app;
