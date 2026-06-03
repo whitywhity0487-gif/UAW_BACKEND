@@ -25,7 +25,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5173/myuandwe",
   "http://localhost:3000",
-  "https://myuandwe.vercel.app"
+  "https://myuandwe-portal.vercel.app"
 ];
 
 app.use((req, res, next) => {
@@ -74,12 +74,12 @@ const swaggerOptions = {
       version: "1.0.0",
       description: "Local Development API Documentation",
     },
-    servers: [
-      {
-        url:https://uaw-backend.vercel.app,
-        description: "Local Development Server"
-      }
-    ],
+ servers: [
+  {
+    url: "https://uaw-backend.vercel.app",
+    description: "Production Server"
+  }
+],
   },
   apis: ["./api/*.js"]
 };
@@ -141,7 +141,11 @@ app.get("/api/test", (req, res) => {
 
 
   
-  await initializeServices();
+initializeServices()
+  .then(() => console.log("✅ Services initialized"))
+  .catch(err => console.error("❌ Service initialization failed:", err));
+
+
 
 
 
