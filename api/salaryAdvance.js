@@ -372,6 +372,7 @@ function getMaxLimitByNationality(nationality) {
 }
 
 // GET - Fetch all requests with filters (for Admin)
+// GET - Fetch all requests with filters (for Admin)
 router.get('/requests', async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
@@ -379,54 +380,61 @@ router.get('/requests', async (req, res) => {
   try {
     const { search, status, dateFrom, dateTo } = req.query;
     
+    // Build query: MATCH request, OPTIONAL MATCH personal details, then filter with WITH + WHERE
     let cypherQuery = `
       MATCH (r:SalaryAdvanceRequest)
       OPTIONAL MATCH (p:PersonalDetails {userId: r.employeeId})
-      WHERE 1=1
+      WITH r, p
     `;
     
     const params = {};
+    const whereClauses = [];
     
     // Add search filter (employee name, ID, employee number, or amount)
     if (search && search.trim()) {
       const searchTerm = search.trim();
-      const searchLower = searchTerm.toLowerCase();
-      
-      // For amount search - check if it's a number
       const amountValue = parseFloat(searchTerm);
-      const isAmountSearch = !isNaN(amountValue) && isFinite(amountValue);
+      const isAmountSearch = !isNaN(amountValue) && isFinite(amountValue) && /^\d+(\.\d+)?$/.test(searchTerm);
       
       if (isAmountSearch) {
-        // When searching for amount, we need exact match or range
-        cypherQuery += ` AND (toLower(r.employeeName) CONTAINS toLower($searchTerm)
+        whereClauses.push(`(
+          toLower(r.employeeName) CONTAINS toLower($searchTerm)
           OR toLower(r.employeeId) CONTAINS toLower($searchTerm)
-          OR toLower(p.employeeNumber) CONTAINS toLower($searchTerm)
-          OR abs(r.amount - $amountValue) < 0.01)`;
+          OR (p IS NOT NULL AND toLower(p.employeeNumber) CONTAINS toLower($searchTerm))
+          OR abs(r.amount - $amountValue) < 0.01
+        )`);
         params.amountValue = amountValue;
+        params.searchTerm = searchTerm;
       } else {
-        // Text search
-        cypherQuery += ` AND (toLower(r.employeeName) CONTAINS toLower($searchTerm)
+        whereClauses.push(`(
+          toLower(r.employeeName) CONTAINS toLower($searchTerm)
           OR toLower(r.employeeId) CONTAINS toLower($searchTerm)
-          OR toLower(p.employeeNumber) CONTAINS toLower($searchTerm))`;
+          OR (p IS NOT NULL AND toLower(p.employeeNumber) CONTAINS toLower($searchTerm))
+        )`);
+        params.searchTerm = searchTerm;
       }
-      params.searchTerm = searchTerm;
     }
     
     // Add status filter
     if (status && status !== 'ALL') {
-      cypherQuery += ` AND r.status = $status`;
+      whereClauses.push(`r.status = $status`);
       params.status = status;
     }
     
-    // Add date range filter
+    // Add date range filter using string comparison (appliedAt is stored as ISO string)
     if (dateFrom) {
-      cypherQuery += ` AND date(r.appliedAt) >= date($dateFrom)`;
+      whereClauses.push(`r.appliedAt >= $dateFrom`);
       params.dateFrom = dateFrom;
     }
     
     if (dateTo) {
-      cypherQuery += ` AND date(r.appliedAt) <= date($dateTo)`;
+      whereClauses.push(`r.appliedAt <= $dateTo`);
       params.dateTo = dateTo;
+    }
+    
+    // Add WHERE clause if there are any filters
+    if (whereClauses.length > 0) {
+      cypherQuery += ` WHERE ` + whereClauses.join(' AND ');
     }
     
     // Complete the query
@@ -453,32 +461,41 @@ router.get('/requests', async (req, res) => {
     
     const result = await session.run(cypherQuery, params);
     
-    const requests = result.records.map(record => ({
-      requestId: record.get('requestId'),
-      employeeId: record.get('employeeId'),
-      employeeName: record.get('employeeName'),
-      employeeEmail: record.get('employeeEmail'),
-      amount: record.get('amount') ? (typeof record.get('amount').toNumber === 'function' ? record.get('amount').toNumber() : Number(record.get('amount'))) : 0,
-      currency: record.get('currency'),
-      reason: record.get('reason') || 'Not provided',
-      status: record.get('status'),
-      appliedAt: record.get('appliedAt'),
-      adminRemarks: record.get('adminRemarks') || null,
-      reviewedBy: record.get('reviewedBy') || null,
-      reviewedAt: record.get('reviewedAt') || null,
-      employeeNumber: record.get('employeeNumber') || null
-    }));
+    const requests = result.records.map(record => {
+      let amount = record.get('amount');
+      // Handle different Neo4j number types
+      if (amount && typeof amount.toNumber === 'function') {
+        amount = amount.toNumber();
+      } else if (amount && typeof amount === 'object') {
+        amount = Number(amount);
+      }
+      
+      return {
+        requestId: record.get('requestId'),
+        employeeId: record.get('employeeId'),
+        employeeName: record.get('employeeName'),
+        employeeEmail: record.get('employeeEmail'),
+        amount: amount || 0,
+        currency: record.get('currency'),
+        reason: record.get('reason') || 'Not provided',
+        status: record.get('status'),
+        appliedAt: record.get('appliedAt'),
+        adminRemarks: record.get('adminRemarks') || null,
+        reviewedBy: record.get('reviewedBy') || null,
+        reviewedAt: record.get('reviewedAt') || null,
+        employeeNumber: record.get('employeeNumber') || null
+      };
+    });
     
     console.log(`Found ${requests.length} requests`);
     
     res.json({ success: true, data: requests });
   } catch (error) {
-    console.error('❌ Error:', error);
+    console.error('❌ Error in /requests:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();
   }
-
 });
 
 // GET - Check if employee has pending request
