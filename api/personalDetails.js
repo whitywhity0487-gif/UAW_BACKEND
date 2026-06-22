@@ -1,4 +1,3 @@
-console.log("✅✅✅ personalDetails.js file is LOADED! ✅✅✅");
 const express = require("express");
 const router = express.Router();
 const multer = require('multer');
@@ -10,7 +9,6 @@ const googleDrive = require("../services/googleDrive");
 
 // Add this at the very top, right after the router initialization
 router.all("/test-route", (req, res) => {
-  console.log("✅ Test route hit!");
   res.json({ success: true, message: "Route is working!" });
 });
 
@@ -18,6 +16,143 @@ router.get("/test", (req, res) => {
   res.json({ success: true, message: "Personal Details API is working!" });
 });
 
+router.get("/validate-unique", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { mobileNumber, personalEmailId, employeeNumber, excludeUserId } = req.query;
+
+  try {
+    let conditions = [];
+    let params = { excludeUserId: excludeUserId || "" };
+
+    if (mobileNumber) {
+      conditions.push(`p.mobileNumber = $mobileNumber`);
+      params.mobileNumber = mobileNumber;
+    }
+    if (personalEmailId) {
+      conditions.push(`p.personalEmailId = $personalEmailId`);
+      params.personalEmailId = personalEmailId;
+    }
+    if (employeeNumber) {
+      conditions.push(`p.employeeNumber = $employeeNumber`);
+      params.employeeNumber = employeeNumber;
+    }
+
+    if (conditions.length === 0) {
+      return res.json({ success: true, isUnique: true, errors: {} });
+    }
+
+    const query = `
+      MATCH (p:PersonalDetails) 
+      WHERE p.userId <> $excludeUserId AND (${conditions.join(" OR ")})
+      RETURN p.mobileNumber as mobile, p.personalEmailId as email, p.employeeNumber as empNo
+    `;
+
+    const result = await session.run(query, params);
+    
+    let errors = {};
+    if (result.records.length > 0) {
+      for (const record of result.records) {
+        if (mobileNumber && record.get("mobile") === mobileNumber) errors.mobileNumber = "Mobile Number already exists.";
+        if (personalEmailId && record.get("email") === personalEmailId) errors.personalEmailId = "Personal Email already exists.";
+        if (employeeNumber && record.get("empNo") === employeeNumber) errors.employeeNumber = "Employee Number already exists.";
+      }
+    }
+
+    res.json({ success: true, isUnique: Object.keys(errors).length === 0, errors });
+  } catch (err) {
+    console.error("Error validating uniqueness:", err);
+    res.status(500).json({ success: false, message: "Validation error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+router.get("/birthdays", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const result = await session.run(`
+      MATCH (p:PersonalDetails)
+      WHERE p.dateOfBirth IS NOT NULL
+      RETURN p.fullName AS fullName,
+             p.employeeNumber AS employeeNumber,
+             p.jobTitle AS jobTitle,
+             p.profilePhotoLink AS profilePhotoLink,
+             p.dateOfBirth AS dateOfBirth,
+             p.emailId AS emailId,
+             p.supervisor AS supervisor
+    `);
+
+    const today = new Date();
+    const todayMonth = today.getMonth();
+    const todayDate = today.getDate();
+
+    const todayBirthdays = [];
+    const upcomingBirthdays = [];
+
+    result.records.forEach((record) => {
+      const dobStr = record.get("dateOfBirth");
+      if (!dobStr) return;
+
+      const dob = new Date(dobStr);
+      if (isNaN(dob.getTime())) return;
+
+      const dobMonth = dob.getMonth();
+      const dobDate = dob.getDate();
+
+      const employee = {
+        fullName: record.get("fullName"),
+        employeeNumber: record.get("employeeNumber"),
+        jobTitle: record.get("jobTitle") || "Employee",
+        profilePhotoLink: record.get("profilePhotoLink") || null,
+        emailId: record.get("emailId") || null,
+        supervisor: record.get("supervisor") || null,
+      };
+
+      if (dobMonth === todayMonth && dobDate === todayDate) {
+        todayBirthdays.push(employee);
+      } else {
+        // Calculate next birthday date
+        let nextBirthdayYear = today.getFullYear();
+        if (
+          dobMonth < todayMonth ||
+          (dobMonth === todayMonth && dobDate < todayDate)
+        ) {
+          nextBirthdayYear++;
+        }
+        
+        const nextBirthday = new Date(nextBirthdayYear, dobMonth, dobDate);
+        
+        // Calculate days remaining without time component to avoid timezone issues
+        const diffTime = nextBirthday.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+        const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        upcomingBirthdays.push({
+          ...employee,
+          daysRemaining,
+        });
+      }
+    });
+
+    upcomingBirthdays.sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    res.json({
+      success: true,
+      todayBirthdays,
+      upcomingBirthdays,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching birthdays:", error.message);
+    res.status(500).json({ success: false, message: "Failed to fetch birthdays" });
+  } finally {
+    await session.close();
+  }
+});
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -41,6 +176,21 @@ const upload = multer({
       } else {
         cb(new Error('Invalid file type. Only JPG, PNG, and PDF are allowed.'));
       }
+    }
+  },
+});
+
+const healthCardUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 1 * 1024 * 1024, // 1MB limit for health cards
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPG, PNG, and PDF are allowed.'));
     }
   },
 });
@@ -99,7 +249,13 @@ const RETURN_FIELDS = `
   .profileSubmittedAt,
   .profileApprovedAt,
   .profileRejectedAt,
-  .profileRejectionReason
+  .profileRejectionReason,
+  .healthCardLink,
+  .healthCardUploadedAt,
+  .experienceType,
+  .yearsOfExperience,
+  .relievingLetterLink,
+  .relievingLetterUploadedAt
 `;
 
 
@@ -116,7 +272,6 @@ router.get("/", async (req, res) => {
 
   try {
     if (userId) {
-      console.log(`\n📡 GET /api/personal-details?userId=${userId}`);
       const result = await session.run(
         `MATCH (p:PersonalDetails {userId: $userId})
          RETURN p { ${RETURN_FIELDS} } as personalDetails`,
@@ -150,7 +305,6 @@ router.get("/", async (req, res) => {
     }
 
     if (email) {
-      console.log(`\n📡 GET /api/personal-details?email=${email}`);
 
       const result = await session.run(
         `MATCH (p:PersonalDetails {emailId: $email})
@@ -178,7 +332,6 @@ router.get("/", async (req, res) => {
     }
 
     if (pid) {
-      console.log(`\n📡 GET /api/personal-details?pid=${pid}`);
 
       const result = await session.run(
         `MATCH (p:PersonalDetails {pid: $pid})
@@ -206,7 +359,6 @@ router.get("/", async (req, res) => {
     }
 
     // Fetch all
-    console.log(`\n📡 GET /api/personal-details - Fetching all`);
 
     const result = await session.run(
       `MATCH (p:PersonalDetails)
@@ -226,7 +378,6 @@ router.get("/", async (req, res) => {
       return details;
     });
 
-    console.log(`✅ Found ${personalDetails.length} records`);
 
     res.json({ success: true, count: personalDetails.length, data: personalDetails });
 
@@ -257,8 +408,7 @@ router.post("/", (req, res, next) => {
 
  uploadMiddleware(req, res, (err) => {
     if (err) {
-      console.log("❌ Multer error DETAILS:", err);
-      console.log("❌ Field that caused error:", err.field);
+     
       return res.status(400).json({ 
         success: false, 
         message: err.message,
@@ -271,10 +421,7 @@ router.post("/", (req, res, next) => {
   const driver = getDriver();
   const session = driver.session();
 
-  console.log("========== REQUEST RECEIVED ==========");
-  console.log("Body keys:", Object.keys(req.body));
-  console.log("Files:", req.files ? Object.keys(req.files) : "none");
-  console.log("======================================");
+
 
   const {
     userId,
@@ -327,7 +474,6 @@ router.post("/", (req, res, next) => {
   const postGraduationCertFile = files?.postGraduationCertificate?.[0];
 
   try {
-    console.log(`\n📡 POST /api/personal-details for userId: ${userId}`);
 
     if (!userId || !firstName || !lastName || !gender || !mobileNumber || !dateOfBirth || !nationality) {
       return res.status(400).json({
@@ -349,10 +495,33 @@ router.post("/", (req, res, next) => {
       });
     }
 
+    // Check for duplicates
+    let duplicateConditions = [];
+    let duplicateParams = { userId: userId || "" };
+    if (mobileNumber) { duplicateConditions.push(`p.mobileNumber = $mobileNumber`); duplicateParams.mobileNumber = mobileNumber; }
+    if (personalEmailId) { duplicateConditions.push(`p.personalEmailId = $personalEmailId`); duplicateParams.personalEmailId = personalEmailId; }
+    if (employeeNumber) { duplicateConditions.push(`p.employeeNumber = $employeeNumber`); duplicateParams.employeeNumber = employeeNumber; }
+
+    if (duplicateConditions.length > 0) {
+      const duplicateCheckResult = await session.run(
+        `MATCH (p:PersonalDetails) WHERE p.userId <> $userId AND (${duplicateConditions.join(" OR ")})
+         RETURN p.mobileNumber as mobile, p.personalEmailId as email, p.employeeNumber as empNo`,
+        duplicateParams
+      );
+      if (duplicateCheckResult.records.length > 0) {
+        let errorMsg = [];
+        for (const record of duplicateCheckResult.records) {
+          if (mobileNumber && record.get("mobile") === mobileNumber) errorMsg.push("Mobile Number already exists.");
+          if (personalEmailId && record.get("email") === personalEmailId) errorMsg.push("Personal Email already exists.");
+          if (employeeNumber && record.get("empNo") === employeeNumber) errorMsg.push("Employee Number already exists.");
+        }
+        return res.status(400).json({ success: false, message: [...new Set(errorMsg)].join(" ") });
+      }
+    }
+
     // Upload Aadhar document to Google Drive
     let aadharDocumentLink = null;
     if (aadharDocumentFile) {
-      console.log(`📤 Uploading Aadhar Document for ${userId}...`);
       const uploadResult = await googleDrive.uploadAadharImage(
         aadharDocumentFile.buffer,
         aadharDocumentFile.originalname,
@@ -362,7 +531,6 @@ router.post("/", (req, res, next) => {
       );
       if (uploadResult.success) {
         aadharDocumentLink = uploadResult.viewLink;
-        console.log(`✅ Aadhar Document uploaded: ${aadharDocumentLink}`);
       } else {
         return res.status(500).json({
           success: false,
@@ -375,7 +543,6 @@ router.post("/", (req, res, next) => {
     // Upload PAN document to Google Drive
     let panLink = null;
     if (panFile) {
-      console.log(`📤 Uploading PAN document for ${userId}...`);
       const uploadResult = await googleDrive.uploadPanImage(
         panFile.buffer,
         panFile.originalname,
@@ -384,7 +551,6 @@ router.post("/", (req, res, next) => {
       );
       if (uploadResult.success) {
         panLink = uploadResult.viewLink;
-        console.log(`✅ PAN uploaded: ${panLink}`);
       } else {
         if (aadharDocumentLink) {
           const fileId = aadharDocumentLink.split('/').pop();
@@ -401,13 +567,11 @@ router.post("/", (req, res, next) => {
     // Upload 10th Certificate to Google Drive
     let tenthCertificateLink = null;
     if (tenthCertFile) {
-      console.log(`📤 Uploading 10th Certificate for ${userId}...`);
       const uploadResult = await googleDrive.uploadTenthCertificate(
         tenthCertFile.buffer, tenthCertFile.originalname, tenthCertFile.mimetype, userId
       );
       if (uploadResult.success) {
         tenthCertificateLink = uploadResult.viewLink;
-        console.log(`✅ 10th Certificate uploaded: ${tenthCertificateLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload 10th Certificate", error: uploadResult.error });
       }
@@ -416,13 +580,11 @@ router.post("/", (req, res, next) => {
     // Upload 12th Certificate to Google Drive
     let twelfthCertificateLink = null;
     if (twelfthCertFile) {
-      console.log(`📤 Uploading 12th Certificate for ${userId}...`);
       const uploadResult = await googleDrive.uploadTwelfthCertificate(
         twelfthCertFile.buffer, twelfthCertFile.originalname, twelfthCertFile.mimetype, userId
       );
       if (uploadResult.success) {
         twelfthCertificateLink = uploadResult.viewLink;
-        console.log(`✅ 12th Certificate uploaded: ${twelfthCertificateLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload 12th Certificate", error: uploadResult.error });
       }
@@ -431,13 +593,11 @@ router.post("/", (req, res, next) => {
     // Upload Resume to Google Drive
     let resumeDocumentLink = null;
     if (resumeFile) {
-      console.log(`📤 Uploading Resume for ${userId}...`);
       const uploadResult = await googleDrive.uploadResume(
         resumeFile.buffer, resumeFile.originalname, resumeFile.mimetype, userId
       );
       if (uploadResult.success) {
         resumeDocumentLink = uploadResult.viewLink;
-        console.log(`✅ Resume uploaded: ${resumeDocumentLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload Resume", error: uploadResult.error });
       }
@@ -446,13 +606,11 @@ router.post("/", (req, res, next) => {
     // Upload Visa Document to Google Drive
     let visaDocumentLink = null;
     if (visaDocFile) {
-      console.log(`📤 Uploading Visa Document for ${userId}...`);
       const uploadResult = await googleDrive.uploadVisaDocument(
         visaDocFile.buffer, visaDocFile.originalname, visaDocFile.mimetype, userId
       );
       if (uploadResult.success) {
         visaDocumentLink = uploadResult.viewLink;
-        console.log(`✅ Visa Document uploaded: ${visaDocumentLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload Visa Document", error: uploadResult.error });
       }
@@ -461,13 +619,11 @@ router.post("/", (req, res, next) => {
     // Upload Profile Photo to Google Drive
     let profilePhotoLink = null;
     if (profilePhotoFile) {
-      console.log(`📤 Uploading Profile Photo for ${userId}...`);
       const uploadResult = await googleDrive.uploadProfilePhoto(
         profilePhotoFile.buffer, profilePhotoFile.originalname, profilePhotoFile.mimetype, userId
       );
       if (uploadResult.success) {
         profilePhotoLink = uploadResult.viewLink;
-        console.log(`✅ Profile Photo uploaded: ${profilePhotoLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload Profile Photo", error: uploadResult.error });
       }
@@ -476,13 +632,11 @@ router.post("/", (req, res, next) => {
     // Upload Graduation Certificate to Google Drive
     let graduationCertificateLink = null;
     if (graduationCertFile) {
-      console.log(`📤 Uploading Graduation Certificate for ${userId}...`);
       const uploadResult = await googleDrive.uploadGraduationCertificate(
         graduationCertFile.buffer, graduationCertFile.originalname, graduationCertFile.mimetype, userId
       );
       if (uploadResult.success) {
         graduationCertificateLink = uploadResult.viewLink;
-        console.log(`✅ Graduation Certificate uploaded: ${graduationCertificateLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload Graduation Certificate", error: uploadResult.error });
       }
@@ -491,13 +645,11 @@ router.post("/", (req, res, next) => {
     // Upload Post Graduation Certificate to Google Drive
     let postGraduationCertificateLink = null;
     if (postGraduationCertFile) {
-      console.log(`📤 Uploading Post Graduation Certificate for ${userId}...`);
       const uploadResult = await googleDrive.uploadPostGraduationCertificate(
         postGraduationCertFile.buffer, postGraduationCertFile.originalname, postGraduationCertFile.mimetype, userId
       );
       if (uploadResult.success) {
         postGraduationCertificateLink = uploadResult.viewLink;
-        console.log(`✅ Post Graduation Certificate uploaded: ${postGraduationCertificateLink}`);
       } else {
         return res.status(500).json({ success: false, message: "Failed to upload Post Graduation Certificate", error: uploadResult.error });
       }
@@ -526,7 +678,6 @@ router.post("/", (req, res, next) => {
     const sequentialNumber = String(count + 1).padStart(3, '0');
     const pidToUse = sequentialNumber;
 
-    console.log(`🎯 Generated PID: ${pidToUse}`);
 
     // Parse skills if it's a string
     let parsedSkills = skills;
@@ -650,7 +801,6 @@ router.post("/", (req, res, next) => {
     );
 
     // Update User node with the generated PID
-    console.log(`🔗 Updating User ${userId} with PID: ${pidToUse}`);
 
     await session.run(
       `MATCH (u:User {username: $userId})
@@ -658,7 +808,6 @@ router.post("/", (req, res, next) => {
       { userId, pid: pidToUse }
     );
 
-    console.log(`✅ Profile created successfully with PID: ${pidToUse}`);
 
     return res.status(201).json({
       success: true,
@@ -677,7 +826,6 @@ router.post("/", (req, res, next) => {
     });
 
   } catch (err) {
-    console.error("❌ Error creating personal details:", err);
     console.error("Error stack:", err.stack);
     res.status(500).json({ success: false, message: "Database error: " + err.message });
   } finally {
@@ -772,6 +920,30 @@ router.put("/resubmit/:userId", (req, res, next) => {
         success: false,
         message: "Resubmission is only allowed for rejected profiles."
       });
+    }
+
+    // Check for duplicates
+    let duplicateConditions = [];
+    let duplicateParams = { userId: userId || "" };
+    if (mobileNumber) { duplicateConditions.push(`p.mobileNumber = $mobileNumber`); duplicateParams.mobileNumber = mobileNumber; }
+    if (personalEmailId) { duplicateConditions.push(`p.personalEmailId = $personalEmailId`); duplicateParams.personalEmailId = personalEmailId; }
+    if (employeeNumber) { duplicateConditions.push(`p.employeeNumber = $employeeNumber`); duplicateParams.employeeNumber = employeeNumber; }
+
+    if (duplicateConditions.length > 0) {
+      const duplicateCheckResult = await session.run(
+        `MATCH (p:PersonalDetails) WHERE p.userId <> $userId AND (${duplicateConditions.join(" OR ")})
+         RETURN p.mobileNumber as mobile, p.personalEmailId as email, p.employeeNumber as empNo`,
+        duplicateParams
+      );
+      if (duplicateCheckResult.records.length > 0) {
+        let errorMsg = [];
+        for (const record of duplicateCheckResult.records) {
+          if (mobileNumber && record.get("mobile") === mobileNumber) errorMsg.push("Mobile Number already exists.");
+          if (personalEmailId && record.get("email") === personalEmailId) errorMsg.push("Personal Email already exists.");
+          if (employeeNumber && record.get("empNo") === employeeNumber) errorMsg.push("Employee Number already exists.");
+        }
+        return res.status(400).json({ success: false, message: [...new Set(errorMsg)].join(" ") });
+      }
     }
 
     // Upload new Aadhar Document if provided
@@ -1076,7 +1248,6 @@ router.put("/resubmit/:userId", (req, res, next) => {
       { userId, pid: pidToUse }
     );
 
-    console.log(`✅ Profile resubmitted successfully for user: ${userId}`);
 
     return res.status(201).json({
       success: true,
@@ -1198,7 +1369,6 @@ router.delete("/:pid", async (req, res) => {
   const { pid } = req.params;
 
   try {
-    console.log(`\n📡 DELETE /api/personal-details/${pid} - Deleting`);
 
     const getResult = await session.run(
       `MATCH (p:PersonalDetails {pid: $pid}) 
@@ -1237,11 +1407,9 @@ router.delete("/:pid", async (req, res) => {
     }
 
     if (deletedCount === 0) {
-      console.log(`❌ Personal details for PID ${pid} not found`);
       return res.status(404).json({ success: false, message: "Personal details not found" });
     }
 
-    console.log(`✅ Deleted successfully for PID: ${pid}`);
 
     res.json({ success: true, message: "Personal details deleted successfully" });
 
@@ -1251,6 +1419,231 @@ router.delete("/:pid", async (req, res) => {
   } finally {
     await session.close();
   }
+});
+
+router.post("/upload-health-card/:employeeNumber", healthCardUpload.single('healthCard'), async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { employeeNumber } = req.params;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({ success: false, message: "No file uploaded" });
+  }
+
+  try {
+    // 1. Check if profile exists and get existing health card
+    const checkResult = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
+       RETURN p.healthCardLink as link`,
+      { employeeNumber }
+    );
+
+    if (checkResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Employee not found" });
+    }
+
+    const oldLink = checkResult.records[0].get("link");
+    let oldFileId = null;
+    if (oldLink && oldLink.includes('/d/')) {
+      oldFileId = oldLink.split('/d/')[1].split('/')[0];
+    }
+
+    // 2. Delete old file from Drive if it exists
+    if (oldFileId) {
+      await googleDrive.deleteFileFromDrive(oldFileId);
+    }
+
+    // 3. Upload new file to Drive
+    const uploadResult = await googleDrive.uploadHealthCard(
+      file.buffer, file.originalname, file.mimetype, employeeNumber
+    );
+
+    if (!uploadResult.success) {
+      return res.status(500).json({ success: false, message: "Failed to upload to Google Drive", error: uploadResult.error });
+    }
+
+    const newFileId = uploadResult.fileId;
+    const viewLink = uploadResult.viewLink;
+    const fileName = file.originalname;
+
+    // 4. Update Neo4j
+    const updateResult = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
+       SET p.healthCardLink = $link,
+           p.healthCardUploadedAt = datetime()
+       RETURN p { .healthCardLink, .healthCardUploadedAt } as updatedCard`,
+      { employeeNumber, link: viewLink }
+    );
+
+    res.json({
+      success: true,
+      message: "Health Card uploaded successfully",
+      data: updateResult.records[0].get("updatedCard")
+    });
+
+  } catch (err) {
+    console.error("❌ Error in upload-health-card:", err);
+    res.status(500).json({ success: false, message: "Server error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+router.get("/health-card/:employeeNumber", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { employeeNumber } = req.params;
+
+  try {
+    const result = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
+       RETURN p.healthCardLink as link, p.healthCardUploadedAt as uploadedAt`,
+      { employeeNumber }
+    );
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Employee not found" });
+    }
+
+    const link = result.records[0].get("link");
+    const uploadedAt = result.records[0].get("uploadedAt");
+
+    if (!link) {
+      return res.json({ success: true, exists: false });
+    }
+
+    res.json({
+      success: true,
+      exists: true,
+      healthCardLink: link,
+      healthCardUploadedAt: uploadedAt
+    });
+
+  } catch (err) {
+    console.error("❌ Error fetching health card:", err);
+    res.status(500).json({ success: false, message: "Server error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+const relievingLetterUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 1 * 1024 * 1024, // 1MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPG, PNG, and PDF are allowed.'));
+    }
+  },
+});
+
+router.post("/employee-transfer/:employeeNumber", relievingLetterUpload.single('relievingLetter'), async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { employeeNumber } = req.params;
+  const { experienceType, yearsOfExperience } = req.body;
+  const file = req.file;
+
+  try {
+    if (experienceType === 'EXPERIENCED' && !file) {
+      return res.status(400).json({ success: false, message: "Previous company relieving letter is mandatory for experienced employees." });
+    }
+
+    let link = null;
+    let fileName = null;
+
+    if (experienceType === 'EXPERIENCED' && file) {
+      const uploadResult = await googleDrive.uploadRelievingLetter(
+        file.buffer, file.originalname, file.mimetype, employeeNumber
+      );
+
+      if (!uploadResult.success) {
+        return res.status(500).json({ success: false, message: "Failed to upload to Google Drive", error: uploadResult.error });
+      }
+
+      link = uploadResult.viewLink;
+      fileName = file.originalname;
+    }
+
+    // Check if profile exists and get old link if any (to clean up if replaced)
+    const checkResult = await session.run(
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       RETURN p.relievingLetterLink as oldLink`,
+      { employeeNumber }
+    );
+
+    if (checkResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Employee not found" });
+    }
+
+    if (file) {
+      const oldLink = checkResult.records[0].get("oldLink");
+      let oldFileId = null;
+      if (oldLink && oldLink.includes('/d/')) {
+        oldFileId = oldLink.split('/d/')[1].split('/')[0];
+      }
+
+      if (oldFileId) {
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+    }
+
+    const setQuery = experienceType === 'EXPERIENCED' 
+      ? `SET p.experienceType = $experienceType, p.yearsOfExperience = $yearsOfExperience, p.relievingLetterLink = $link, p.relievingLetterUploadedAt = datetime()`
+      : `SET p.experienceType = $experienceType, p.yearsOfExperience = null, p.relievingLetterLink = null, p.relievingLetterUploadedAt = null`;
+
+    const updateResult = await session.run(
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       ${setQuery}
+       RETURN p { .experienceType, .yearsOfExperience, .relievingLetterLink, .relievingLetterUploadedAt } as updatedData`,
+      { employeeNumber, experienceType, yearsOfExperience, link }
+    );
+
+    res.json({
+      success: true,
+      message: "Transfer request submitted successfully",
+      data: updateResult.records[0].get("updatedData")
+    });
+
+  } catch (err) {
+    console.error("❌ Error in employee transfer submission:", err);
+    res.status(500).json({ success: false, message: "Server error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Error handling middleware for Multer specifically
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: "File size exceeds 1MB limit" });
+    }
+    return res.status(400).json({ success: false, message: err.message });
+  } else if (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  next();
 });
 
 module.exports = router;

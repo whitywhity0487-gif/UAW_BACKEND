@@ -26,7 +26,6 @@ async function getExistingDriveFile() {
 // Delete old file and upload new one
 async function uploadAndReplace(filePath) {
   try {
-    console.log(`📤 Uploading with replace mode...`);
     
     // Check for existing file
     const existingFile = await getExistingDriveFile();
@@ -89,22 +88,20 @@ async function isExportNeeded() {
 // Function to export and upload
 async function autoExportAndUpload() {
   if (isExporting) {
-    console.log('⚠️ Export already in progress, skipping...');
     return { success: false, error: 'Export already in progress' };
   }
   
   isExporting = true;
   const startTime = Date.now();
   
-  console.log('\n' + '='.repeat(60));
-  console.log('📊 CANDIDATE AUTO-EXPORT (DAILY REPLACE)');
-  console.log(`⏰ Time: ${new Date().toLocaleString()}`);
-  console.log('='.repeat(60));
+  // console.log('\n' + '='.repeat(60));
+  // console.log('📊 CANDIDATE AUTO-EXPORT (DAILY REPLACE)');
+  // console.log(`⏰ Time: ${new Date().toLocaleString()}`);
+  // console.log('='.repeat(60));
   
   try {
     const apiUrl = `http://localhost:${process.env.PORT || 5000}`;
     
-    console.log(`🌐 Fetching candidates from: ${apiUrl}/api/candidates/all`);
     
     const response = await axios.get(`${apiUrl}/api/candidates/all`, {
       timeout: 60000,
@@ -116,10 +113,8 @@ async function autoExportAndUpload() {
     }
     
     const candidates = response.data.data || [];
-    console.log(`✅ Fetched ${candidates.length} candidates`);
     
     if (candidates.length === 0) {
-      console.log('⚠️ No candidates found, skipping export');
       return { success: false, error: 'No candidates to export' };
     }
     
@@ -178,24 +173,22 @@ async function autoExportAndUpload() {
     const filePath = path.join(exportDir, fileName);
     XLSX.writeFile(workbook, filePath);
     const fileSize = fs.statSync(filePath).size;
-    console.log(`✅ Excel file created: ${fileName} (${(fileSize / 1024).toFixed(2)} KB)`);
     
     // Upload to Google Drive (replace)
-    console.log('📤 Uploading to Google Drive (replacing old file)...');
     
     const driveResult = await uploadAndReplace(filePath);
     
     if (driveResult && driveResult.success) {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       
-      console.log('\n' + '🎉'.repeat(20));
-      console.log('✅ CANDIDATE EXPORT COMPLETED!');
-      console.log('-'.repeat(40));
-      console.log(`📊 Candidates: ${candidates.length}`);
-      console.log(`📁 File: ${driveResult.fileName}`);
-      console.log(`🔗 Drive Link: ${driveResult.viewLink}`);
-      console.log(`⏱️ Time: ${duration}s`);
-      console.log('🎉'.repeat(20));
+      // console.log('\n' + '🎉'.repeat(20));
+      // console.log('✅ CANDIDATE EXPORT COMPLETED!');
+      // console.log('-'.repeat(40));
+      // console.log(`📊 Candidates: ${candidates.length}`);
+      // console.log(`📁 File: ${driveResult.fileName}`);
+      // console.log(`🔗 Drive Link: ${driveResult.viewLink}`);
+      // console.log(`⏱️ Time: ${duration}s`);
+      // console.log('🎉'.repeat(20));
       
       // Save to history
       const historyFile = path.join(exportDir, 'candidate_export_history.json');
@@ -236,7 +229,7 @@ async function autoExportAndUpload() {
 
 // Run on startup
 async function runExportIfNeeded() {
-  console.log('\n🔍 Checking if today\'s export is needed...');
+  // console.log('\n🔍 Checking if today\'s export is needed...');
   const needed = await isExportNeeded();
   
   if (needed) {
@@ -251,8 +244,8 @@ async function runExportIfNeeded() {
 async function initAutoExport() {
   if (isInitialized) return;
   
-  console.log('\n🚀 Initializing Candidate Auto-Export (Daily Replace Mode)...');
-  console.log('='.repeat(40));
+  // console.log('\n🚀 Initializing Candidate Auto-Export (Daily Replace Mode)...');
+  // console.log('='.repeat(40));
   
   try {
     const auth = await authorize();

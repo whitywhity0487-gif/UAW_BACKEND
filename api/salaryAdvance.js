@@ -1,69 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const getDriver = require('../lib/neo4j');
-const nodemailer = require('nodemailer');
-
-// Email transporter setup
-let transporter = null;
-try {
-  transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.office365.com',
-    port: parseInt(process.env.SMTP_PORT) || 587,
-    secure: false,
-    auth: {
-      user: process.env.SMTP_EMAIL,
-      pass: process.env.SMTP_PASSWORD
-    }
-  });
-  console.log('✅ Email transporter configured');
-} catch (error) {
-  console.log('⚠️ Email not configured:', error.message);
-}
+const { sendSalaryAdvanceEmail, sendEmail } = require('../services/emailService');
 
 // ==================== HELPER FUNCTIONS ====================
-
-// Get employee details from database
-async function getEmployeeDetails(employeeId) {
-  const driver = getDriver();
-  const session = driver.session();
-  
-  try {
-    // First try PersonalDetails
-    let result = await session.run(
-      `MATCH (p:PersonalDetails {userId: $employeeId})
-       RETURN p.emailId as email, p.fullName as name, p.nationality as nationality`,
-      { employeeId }
-    );
-    
-    // If not found, try User node
-    if (result.records.length === 0) {
-      result = await session.run(
-        `MATCH (u:User {username: $employeeId})
-         RETURN u.email as email, u.name as name, u.nationality as nationality`,
-        { employeeId }
-      );
-    }
-    
-    if (result.records.length === 0) {
-      return { found: false };
-    }
-    
-    const record = result.records[0];
-    return {
-      found: true,
-      email: record.get('email'),
-      name: record.get('name') || employeeId,
-      nationality: record.get('nationality') || 'INDIA'
-    };
-  } finally {
-    await session.close();
-  }
-}
 
 // Get amount limit based on nationality
 function getAmountLimit(nationality) {
   const upper = (nationality || '').toUpperCase();
-  switch(upper) {
+  switch (upper) {
     case 'INDIA': return { max: 100000, min: 1000, currency: 'INR', symbol: '₹', employeeType: 'Indian' };
     case 'USA': return { max: 1000, min: 100, currency: 'USD', symbol: '$', employeeType: 'US' };
     case 'CHINA': return { max: 7000, min: 500, currency: 'CNY', symbol: '¥', employeeType: 'Chinese' };
@@ -71,137 +16,160 @@ function getAmountLimit(nationality) {
   }
 }
 
+// Get employee details directly from PersonalDetails
+async function getEmployeeDetailsFromPersonalDetails(session, employeeId) {
+  const result = await session.run(
+    `MATCH (p:PersonalDetails {userId: $employeeId})
+     RETURN p.employeeNumber as employeeNumber, p.fullName as employeeName, p.nationality as nationality, p.emailId as email`,
+    { employeeId }
+  );
+  if (result.records.length === 0) {
+    return null;
+  }
+  const record = result.records[0];
+  const employeeNumber = record.get('employeeNumber');
+  if (!employeeNumber) return null; // employeeNumber is mandatory
+
+  return {
+    employeeNumber,
+    employeeName: record.get('employeeName') || employeeId,
+    nationality: record.get('nationality') || 'INDIA',
+    email: record.get('email')
+  };
+}
+
+// Ensure SalaryAdvanceAccount exists and get it
+async function getOrCreateSalaryAdvanceAccount(session, employee) {
+  const limit = getAmountLimit(employee.nationality);
+
+  const result = await session.run(
+    `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+     RETURN a`,
+    { employeeNumber: employee.employeeNumber }
+  );
+
+  if (result.records.length > 0) {
+    const node = result.records[0].get('a');
+    return {
+      salaryAdvanceUsed: node.properties.salaryAdvanceUsed !== undefined ? Number(node.properties.salaryAdvanceUsed) : 0,
+      salaryAdvanceRemaining: node.properties.salaryAdvanceRemaining !== undefined ? Number(node.properties.salaryAdvanceRemaining) : limit.max,
+      salaryAdvanceEligible: node.properties.salaryAdvanceEligible !== undefined ? node.properties.salaryAdvanceEligible : true,
+      isRepaid: node.properties.isRepaid || false,
+      repaidDate: node.properties.repaidDate || null,
+      repaidBy: node.properties.repaidBy || null,
+      repaymentRemarks: node.properties.repaymentRemarks || null
+    };
+  } else {
+    // Create new account
+    await session.run(
+      `CREATE (a:SalaryAdvanceAccount {
+         employeeNumber: $employeeNumber,
+         employeeName: $employeeName,
+         salaryAdvanceUsed: 0,
+         salaryAdvanceRemaining: $salaryAdvanceRemaining,
+         salaryAdvanceEligible: true,
+         isRepaid: false,
+         createdAt: datetime(),
+         updatedAt: datetime()
+       })`,
+      {
+        employeeNumber: employee.employeeNumber,
+        employeeName: employee.employeeName,
+        salaryAdvanceRemaining: limit.max
+      }
+    );
+    return { salaryAdvanceUsed: 0, salaryAdvanceRemaining: limit.max, salaryAdvanceEligible: true, isRepaid: false };
+  }
+}
+
 // ==================== API ENDPOINTS ====================
 
 // POST - Submit salary advance request
 router.post('/request', async (req, res) => {
-  console.log('📥 Received request:', req.body);
-  
+
   const { employeeId, amount, reason } = req.body;
-  
+
   if (!employeeId || !amount) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Employee ID and amount are required' 
-    });
-  }
-  
-  if (amount <= 0) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Amount must be greater than 0' 
-    });
+    return res.status(400).json({ success: false, message: 'Employee ID and amount are required' });
   }
 
-  if (reason && reason.length > 500) {
-    return res.status(400).json({
-      success: false,
-      message: 'Reason must be 500 characters or less'
-    });
+  const trimmedReason = (reason || '').trim();
+  if (!trimmedReason) {
+    return res.status(400).json({ success: false, message: 'Reason is required for salary advance request.' });
   }
-  
+  if (trimmedReason.length > 500) {
+    return res.status(400).json({ success: false, message: 'Reason must be 500 characters or less' });
+  }
+
   const driver = getDriver();
   const session = driver.session();
-  
-  try {
-    // Get employee details from database
-    const employee = await getEmployeeDetails(employeeId);
-    
-    if (!employee.found) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Employee not found. Please complete your personal details first.' 
-      });
-    }
-    
-    // Check if already has pending request
-    const pendingCheck = await session.run(
-      `MATCH (r:SalaryAdvanceRequest {employeeId: $employeeId, status: 'PENDING'})
-       RETURN r.requestId AS requestId`,
-      { employeeId }
-    );
-    
-    if (pendingCheck.records.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'You already have a pending request. Please wait for admin approval.'
-      });
-    }
-    
-    // Validate amount limits based on nationality
-    const limit = getAmountLimit(employee.nationality);
-    if (amount < limit.min) {
-      return res.status(400).json({
-        success: false,
-        message: `Minimum amount is ${limit.symbol}${limit.min.toLocaleString()} ${limit.currency} for ${limit.employeeType} employees`
-      });
-    }
-    if (amount > limit.max) {
-      return res.status(400).json({
-        success: false,
-        message: `Maximum amount is ${limit.symbol}${limit.max.toLocaleString()} ${limit.currency} for ${limit.employeeType} employees`
-      });
-    }
-    
-    // Generate sequential request ID in format SAL_1, SAL_2, etc.
-// Generate sequential request ID in format SAL_1, SAL_2, etc.
-let requestId;
-let isUnique = false;
-let counter = 1;
 
-while (!isUnique) {
-  // Get the current maximum sequence number
-  const maxSeqResult = await session.run(
-    `MATCH (r:SalaryAdvanceRequest)
-     WHERE r.requestId =~ 'SAL_.*'
-     RETURN max(toInteger(split(r.requestId, '_')[1])) AS maxSeq`
-  );
-  
-  let maxSeq = 0;
-  if (maxSeqResult.records.length > 0) {
-    const maxSeqValue = maxSeqResult.records[0].get('maxSeq');
-    // Handle different possible return types
-    if (maxSeqValue !== null) {
-      if (typeof maxSeqValue === 'number') {
-        maxSeq = maxSeqValue;
-      } else if (typeof maxSeqValue === 'object' && maxSeqValue.toNumber) {
-        maxSeq = maxSeqValue.toNumber();
-      } else if (typeof maxSeqValue === 'string') {
-        maxSeq = parseInt(maxSeqValue, 10);
-      } else {
-        maxSeq = Number(maxSeqValue) || 0;
-      }
+  try {
+    const employee = await getEmployeeDetailsFromPersonalDetails(session, employeeId);
+    if (!employee) {
+      return res.status(404).json({ success: false, message: 'Employee Personal Details not found or missing employeeNumber.' });
     }
-  }
-  
-  counter = maxSeq + 1;
-  requestId = `SAL_${counter}`;
-  
-  // Verify this ID doesn't exist (double-check)
-  const existingCheck = await session.run(
-    `MATCH (r:SalaryAdvanceRequest {requestId: $requestId})
-     RETURN r.requestId AS requestId`,
-    { requestId }
-  );
-  
-  if (existingCheck.records.length === 0) {
-    isUnique = true;
-  } else {
-    // If somehow exists, increment counter
-    counter++;
-    requestId = `SAL_${counter}`;
-  }
-}
-    
+
+    const account = await getOrCreateSalaryAdvanceAccount(session, employee);
+
+    if (!account.salaryAdvanceEligible) {
+      return res.status(400).json({ success: false, message: 'You are currently not eligible to submit a salary advance request. Please contact HR/Admin for further assistance.' });
+    }
+
+    if (parseFloat(amount) > account.salaryAdvanceRemaining) {
+      return res.status(400).json({ success: false, message: 'Requested amount exceeds your available salary advance balance.' });
+    }
+
+    const limit = getAmountLimit(employee.nationality);
+
+    // Check if pending exists
+    const pendingCheck = await session.run(
+      `MATCH (r:SalaryAdvanceRequest {employeeNumber: $employeeNumber, status: 'PENDING'})
+       RETURN r.requestId AS requestId`,
+      { employeeNumber: employee.employeeNumber }
+    );
+    if (pendingCheck.records.length > 0) {
+      return res.status(400).json({ success: false, message: 'You already have a pending request. Please wait for admin approval.' });
+    }
+
+    // Generate sequential request ID
+    let requestId;
+    let isUnique = false;
+    let counter = 1;
+
+    while (!isUnique) {
+      const maxSeqResult = await session.run(
+        `MATCH (r:SalaryAdvanceRequest)
+         WHERE r.requestId =~ 'SAL_.*'
+         RETURN max(toInteger(split(r.requestId, '_')[1])) AS maxSeq`
+      );
+
+      let maxSeq = 0;
+      if (maxSeqResult.records.length > 0) {
+        const maxSeqValue = maxSeqResult.records[0].get('maxSeq');
+        if (maxSeqValue !== null) {
+          maxSeq = Number(maxSeqValue) || 0;
+        }
+      }
+      counter = maxSeq + 1;
+      requestId = `SAL_${counter}`;
+
+      const existingCheck = await session.run(
+        `MATCH (r:SalaryAdvanceRequest {requestId: $requestId}) RETURN r.requestId AS requestId`,
+        { requestId }
+      );
+      if (existingCheck.records.length === 0) isUnique = true;
+      else counter++;
+    }
+
     const appliedAt = new Date().toISOString();
-    
-    // Store only required fields — NO selectedCountry
+
+    // Create Request (NO employeeId)
     await session.run(
       `CREATE (r:SalaryAdvanceRequest {
         requestId: $requestId,
-        employeeId: $employeeId,
+        employeeNumber: $employeeNumber,
         employeeName: $employeeName,
-        employeeEmail: $employeeEmail,
         amount: $amount,
         currency: $currency,
         reason: $reason,
@@ -210,50 +178,29 @@ while (!isUnique) {
       })`,
       {
         requestId,
-        employeeId,
-        employeeName: employee.name,
-        employeeEmail: employee.email,
+        employeeNumber: employee.employeeNumber,
+        employeeName: employee.employeeName,
         amount: parseFloat(amount),
         currency: limit.currency,
-        reason: reason || 'Not provided',
+        reason: trimmedReason,
         appliedAt
       }
     );
-    
-    console.log(`✅ Request created: ${requestId} for ${employee.name}`);
-    
-    // Try to send email (don't fail if email doesn't work)
-    if (transporter) {
-      try {
-        await transporter.sendMail({
-          from: process.env.SMTP_EMAIL,
-          to: process.env.ADMIN_EMAIL,
-          subject: `💰 Salary Advance Request - ${employee.name}`,
-          html: `
-            <h2>Salary Advance Request</h2>
-            <p><strong>Request ID:</strong> ${requestId}</p>
-            <p><strong>Employee Name:</strong> ${employee.name}</p>
-            <p><strong>Employee Email:</strong> ${employee.email}</p>
-            <p><strong>Employee ID:</strong> ${employeeId}</p>
-            <p><strong>Amount:</strong> ${limit.currency} ${amount.toLocaleString()}</p>
-            <p><strong>Nationality:</strong> ${employee.nationality}</p>
-            <p><strong>Reason:</strong> ${reason || 'Not provided'}</p>
-            <hr>
-            <p>Login to HR Portal to approve or reject this request.</p>
-          `
-        });
-        console.log('📧 Email sent to admin');
-      } catch (emailErr) {
-        console.log('⚠️ Email not sent:', emailErr.message);
-      }
+
+
+    try {
+      await sendSalaryAdvanceEmail({
+        employeeName: employee.employeeName,
+        employeeNumber: employee.employeeNumber,
+        requestedAmount: amount,
+        reason: trimmedReason,
+        submissionDate: new Date().toLocaleString()
+      });
+    } catch (emailErr) {
+      console.log('⚠️ Email not sent:', emailErr.message);
     }
-    
-    res.json({ 
-      success: true, 
-      message: 'Request submitted successfully! Admin will review it.',
-      requestId 
-    });
-    
+
+    res.json({ success: true, message: 'Request submitted successfully! Admin will review it.', requestId });
   } catch (error) {
     console.error('❌ Error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -262,180 +209,90 @@ while (!isUnique) {
   }
 });
 
+// GET - Employee analytics (Uses SalaryAdvanceAccount)
 router.get('/employee-analytics/:employeeId', async (req, res) => {
   const driver = getDriver();
-  const session = driver.session(); // ← ADD THIS LINE
-  
+  const session = driver.session();
+
   try {
     const { employeeId } = req.params;
-    
-    // Get employee details
-    const employeeQuery = `
-      MATCH (p:PersonalDetails {userId: $employeeId})
-      RETURN p.fullName as employeeName, p.userId as employeeId, 
-             p.nationality as nationality, p.emailId as email,
-             p.employeeNumber as employeeNumber, p.profilePhotoLink as profilePhoto
-    `;
-    const employeeResult = await session.run(employeeQuery, { employeeId });
-    
-    let employee;
-    if (employeeResult.records.length === 0) {
-      // Fallback if PersonalDetails not found, try User node
-      const fallbackQuery = `
-        MATCH (u:User {username: $employeeId})
-        RETURN u.name as employeeName, u.username as employeeId,
-               u.nationality as nationality, u.email as email,
-               null as employeeNumber, null as profilePhoto
-      `;
-      const fallbackResult = await session.run(fallbackQuery, { employeeId });
-      
-      if (fallbackResult.records.length === 0) {
-        return res.status(404).json({ success: false, message: 'Employee not found' });
-      }
-      employee = fallbackResult.records[0];
-    } else {
-      employee = employeeResult.records[0];
+    const employee = await getEmployeeDetailsFromPersonalDetails(session, employeeId);
+
+    if (!employee) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
     }
-    
-    // Get all approved advances for this employee (current financial year)
-    const currentYear = new Date().getFullYear();
-    const startDate = `${currentYear}-04-01`; // Assuming financial year starts April 1
-    const endDate = `${currentYear + 1}-03-31`;
-    
-    const advancesQuery = `
-      MATCH (sar:SalaryAdvanceRequest {employeeId: $employeeId, status: 'APPROVED'})
-      WHERE date(sar.appliedAt) >= date($startDate) 
-        AND date(sar.appliedAt) <= date($endDate)
-      RETURN sar.requestId as requestId, sar.amount as amount, 
-             sar.currency as currency, sar.appliedAt as appliedAt,
-             sar.adminRemarks as adminRemarks, sar.status as status
-      ORDER BY sar.appliedAt DESC
-    `;
-    
-    const advancesResult = await session.run(advancesQuery, { 
-      employeeId, 
-      startDate, 
-      endDate 
-    });
-    
-    const advanceHistory = advancesResult.records.map(record => ({
-      requestId: record.get('requestId'),
-      amount: record.get('amount').toNumber(),
-      currency: record.get('currency'),
-      appliedAt: record.get('appliedAt'),
-      adminRemarks: record.get('adminRemarks'),
-      status: record.get('status')
-    }));
-    
-    // Calculate totals
-    const totalAdvances = advanceHistory.length;
-    const totalAmount = advanceHistory.reduce((sum, adv) => sum + adv.amount, 0);
-    
-    // Get max limit based on nationality
-    const nationality = employee.get('nationality') || 'INDIA';
-    const maxLimit = getMaxLimitByNationality(nationality);
-    const remainingLimit = maxLimit - totalAmount;
-    
+
+    const account = await getOrCreateSalaryAdvanceAccount(session, employee);
+
     res.json({
       success: true,
       data: {
-        employeeId: employee.get('employeeId'),
-        employeeName: employee.get('employeeName'),
-        nationality: nationality,
-        email: employee.get('email'),
-        employeeNumber: employee.get('employeeNumber') || null,
-        profilePhoto: employee.get('profilePhoto') || null,
-        totalAdvances: totalAdvances,
-        totalAmount: totalAmount,
-        maxLimit: maxLimit,
-        remainingLimit: remainingLimit > 0 ? remainingLimit : 0,
-        advanceHistory: advanceHistory
+        employeeNumber: employee.employeeNumber,
+        employeeName: employee.employeeName,
+        nationality: employee.nationality,
+        email: employee.email,
+        salaryAdvanceUsed: account.salaryAdvanceUsed,
+        salaryAdvanceRemaining: account.salaryAdvanceRemaining,
+        salaryAdvanceEligible: account.salaryAdvanceEligible,
+        isRepaid: account.isRepaid,
+        repaidDate: account.repaidDate || null,
+        repaidBy: account.repaidBy || null,
+        repaymentRemarks: account.repaymentRemarks || null
       }
     });
-    
   } catch (error) {
     console.error('Error fetching employee analytics:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   } finally {
-    await session.close(); // ← ADD THIS
+    await session.close();
   }
 });
-
-
-function getMaxLimitByNationality(nationality) {
-  const limits = {
-    'INDIA': 100000,
-    'USA': 1000,
-    'CHINA': 7000
-  };
-  return limits[nationality.toUpperCase()] || 100000;
-}
 
 // GET - Fetch all requests with filters (for Admin)
 router.get('/requests', async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const { search, status, dateFrom, dateTo } = req.query;
-    
-    let cypherQuery = `
-      MATCH (r:SalaryAdvanceRequest)
-      OPTIONAL MATCH (p:PersonalDetails {userId: r.employeeId})
-      WHERE 1=1
-    `;
-    
+
+    let cypherQuery = `MATCH (r:SalaryAdvanceRequest) WITH r`;
     const params = {};
-    
-    // Add search filter (employee name, ID, employee number, or amount)
+    const whereClauses = [];
+
     if (search && search.trim()) {
       const searchTerm = search.trim();
-      const searchLower = searchTerm.toLowerCase();
-      
-      // For amount search - check if it's a number
       const amountValue = parseFloat(searchTerm);
-      const isAmountSearch = !isNaN(amountValue) && isFinite(amountValue);
-      
-      if (isAmountSearch) {
-        // When searching for amount, we need exact match or range
-        cypherQuery += ` AND (toLower(r.employeeName) CONTAINS toLower($searchTerm)
-          OR toLower(r.employeeId) CONTAINS toLower($searchTerm)
-          OR toLower(p.employeeNumber) CONTAINS toLower($searchTerm)
-          OR abs(r.amount - $amountValue) < 0.01)`;
+      if (!isNaN(amountValue) && isFinite(amountValue) && /^\\d+(\\.\\d+)?$/.test(searchTerm)) {
+        whereClauses.push(`(toLower(r.employeeName) CONTAINS toLower($searchTerm) OR toLower(r.employeeNumber) CONTAINS toLower($searchTerm) OR abs(r.amount - $amountValue) < 0.01)`);
         params.amountValue = amountValue;
+        params.searchTerm = searchTerm;
       } else {
-        // Text search
-        cypherQuery += ` AND (toLower(r.employeeName) CONTAINS toLower($searchTerm)
-          OR toLower(r.employeeId) CONTAINS toLower($searchTerm)
-          OR toLower(p.employeeNumber) CONTAINS toLower($searchTerm))`;
+        whereClauses.push(`(toLower(r.employeeName) CONTAINS toLower($searchTerm) OR toLower(r.employeeNumber) CONTAINS toLower($searchTerm))`);
+        params.searchTerm = searchTerm;
       }
-      params.searchTerm = searchTerm;
     }
-    
-    // Add status filter
+
     if (status && status !== 'ALL') {
-      cypherQuery += ` AND r.status = $status`;
+      whereClauses.push(`r.status = $status`);
       params.status = status;
     }
-    
-    // Add date range filter
     if (dateFrom) {
-      cypherQuery += ` AND date(r.appliedAt) >= date($dateFrom)`;
+      whereClauses.push(`r.appliedAt >= $dateFrom`);
       params.dateFrom = dateFrom;
     }
-    
     if (dateTo) {
-      cypherQuery += ` AND date(r.appliedAt) <= date($dateTo)`;
+      whereClauses.push(`r.appliedAt <= $dateTo`);
       params.dateTo = dateTo;
     }
-    
-    // Complete the query
+
+    if (whereClauses.length > 0) cypherQuery += ` WHERE ` + whereClauses.join(' AND ');
+
     cypherQuery += `
       RETURN 
         r.requestId AS requestId,
-        r.employeeId AS employeeId,
+        r.employeeNumber AS employeeNumber,
         r.employeeName AS employeeName,
-        r.employeeEmail AS employeeEmail,
         r.amount AS amount,
         r.currency AS currency,
         r.reason AS reason,
@@ -443,42 +300,38 @@ router.get('/requests', async (req, res) => {
         r.appliedAt AS appliedAt,
         r.adminRemarks AS adminRemarks,
         r.reviewedBy AS reviewedBy,
-        r.reviewedAt AS reviewedAt,
-        p.employeeNumber AS employeeNumber
+        r.reviewedAt AS reviewedAt
       ORDER BY r.appliedAt DESC
     `;
-    
-    console.log('Executing query:', cypherQuery);
-    console.log('With params:', params);
-    
+
     const result = await session.run(cypherQuery, params);
-    
-    const requests = result.records.map(record => ({
-      requestId: record.get('requestId'),
-      employeeId: record.get('employeeId'),
-      employeeName: record.get('employeeName'),
-      employeeEmail: record.get('employeeEmail'),
-      amount: record.get('amount') ? (typeof record.get('amount').toNumber === 'function' ? record.get('amount').toNumber() : Number(record.get('amount'))) : 0,
-      currency: record.get('currency'),
-      reason: record.get('reason') || 'Not provided',
-      status: record.get('status'),
-      appliedAt: record.get('appliedAt'),
-      adminRemarks: record.get('adminRemarks') || null,
-      reviewedBy: record.get('reviewedBy') || null,
-      reviewedAt: record.get('reviewedAt') || null,
-      employeeNumber: record.get('employeeNumber') || null
-    }));
-    
-    console.log(`Found ${requests.length} requests`);
-    
+
+    const requests = result.records.map(record => {
+      let amount = record.get('amount');
+      if (amount && typeof amount.toNumber === 'function') amount = amount.toNumber();
+      else if (amount && typeof amount === 'object') amount = Number(amount);
+
+      return {
+        requestId: record.get('requestId'),
+        employeeNumber: record.get('employeeNumber'),
+        employeeName: record.get('employeeName'),
+        amount: amount || 0,
+        currency: record.get('currency'),
+        reason: record.get('reason') || 'Not provided',
+        status: record.get('status'),
+        appliedAt: record.get('appliedAt'),
+        adminRemarks: record.get('adminRemarks') || null,
+        reviewedBy: record.get('reviewedBy') || null,
+        reviewedAt: record.get('reviewedAt') || null
+      };
+    });
+
     res.json({ success: true, data: requests });
   } catch (error) {
-    console.error('❌ Error:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();
   }
-
 });
 
 // GET - Check if employee has pending request
@@ -486,18 +339,18 @@ router.get('/pending/:employeeId', async (req, res) => {
   const { employeeId } = req.params;
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
+    const employee = await getEmployeeDetailsFromPersonalDetails(session, employeeId);
+    if (!employee) return res.json({ success: true, hasPending: false });
+
     const result = await session.run(
-      `MATCH (r:SalaryAdvanceRequest {employeeId: $employeeId, status: 'PENDING'})
+      `MATCH (r:SalaryAdvanceRequest {employeeNumber: $employeeNumber, status: 'PENDING'})
        RETURN r.requestId AS requestId`,
-      { employeeId }
+      { employeeNumber: employee.employeeNumber }
     );
-    
-    res.json({ 
-      success: true, 
-      hasPending: result.records.length > 0 
-    });
+
+    res.json({ success: true, hasPending: result.records.length > 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -510,10 +363,13 @@ router.get('/employee-requests/:employeeId', async (req, res) => {
   const { employeeId } = req.params;
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
+    const employee = await getEmployeeDetailsFromPersonalDetails(session, employeeId);
+    if (!employee) return res.json({ success: true, data: [] });
+
     const result = await session.run(
-      `MATCH (r:SalaryAdvanceRequest {employeeId: $employeeId})
+      `MATCH (r:SalaryAdvanceRequest {employeeNumber: $employeeNumber})
        RETURN 
          r.requestId AS requestId,
          r.amount AS amount,
@@ -524,9 +380,9 @@ router.get('/employee-requests/:employeeId', async (req, res) => {
          r.adminRemarks AS adminRemarks,
          r.reviewedBy AS reviewedBy
        ORDER BY r.appliedAt DESC`,
-      { employeeId }
+      { employeeNumber: employee.employeeNumber }
     );
-    
+
     const requests = result.records.map(record => ({
       requestId: record.get('requestId'),
       amount: record.get('amount'),
@@ -537,7 +393,7 @@ router.get('/employee-requests/:employeeId', async (req, res) => {
       adminRemarks: record.get('adminRemarks') || null,
       reviewedBy: record.get('reviewedBy') || null
     }));
-    
+
     res.json({ success: true, data: requests });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -552,66 +408,110 @@ router.put('/request/:requestId/approve', async (req, res) => {
   const { adminRemarks, reviewedBy } = req.body;
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     // Get request details
     const getResult = await session.run(
       `MATCH (r:SalaryAdvanceRequest {requestId: $requestId})
-       RETURN r.employeeName AS employeeName, 
-              r.employeeEmail AS employeeEmail,
+       RETURN r.employeeNumber AS employeeNumber, 
+              r.employeeName AS employeeName,
               r.amount AS amount,
               r.currency AS currency`,
       { requestId }
     );
-    
+
     if (getResult.records.length === 0) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+
     const record = getResult.records[0];
+    const employeeNumber = record.get('employeeNumber');
     const employeeName = record.get('employeeName');
-    const employeeEmail = record.get('employeeEmail');
-    const amount = record.get('amount');
     const currency = record.get('currency');
-    
-    // Update status
+    let amount = record.get('amount');
+    if (typeof amount.toNumber === 'function') amount = amount.toNumber();
+    else amount = Number(amount);
+
+    // Get employee nationality to check limit
+    const pResult = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.nationality as nationality, p.emailId as emailId`,
+      { employeeNumber }
+    );
+    const nationality = pResult.records.length > 0 ? pResult.records[0].get('nationality') : 'INDIA';
+    const employeeEmail = pResult.records.length > 0 ? pResult.records[0].get('emailId') : null;
+    const limit = getAmountLimit(nationality);
+
+    // Update SalaryAdvanceAccount
+    const accountResult = await session.run(
+      `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       RETURN a.salaryAdvanceUsed as used, a.salaryAdvanceRemaining as remaining`,
+      { employeeNumber }
+    );
+
+    let currentUsed = 0;
+    if (accountResult.records.length > 0) {
+      currentUsed = Number(accountResult.records[0].get('used')) || 0;
+    } else {
+      await session.run(
+        `CREATE (a:SalaryAdvanceAccount {
+           employeeNumber: $employeeNumber,
+           employeeName: $employeeName,
+           salaryAdvanceUsed: 0,
+           salaryAdvanceRemaining: $remaining,
+           salaryAdvanceEligible: true,
+           isRepaid: false,
+           createdAt: datetime(),
+           updatedAt: datetime()
+         })`,
+        { employeeNumber, employeeName, remaining: limit.max }
+      );
+    }
+
+    const newUsed = currentUsed + amount;
+    const newRemaining = limit.max - newUsed;
+    const isEligible = newRemaining > 0;
+
+    await session.run(
+      `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       SET a.salaryAdvanceUsed = $newUsed,
+           a.salaryAdvanceRemaining = $newRemaining,
+           a.salaryAdvanceEligible = $isEligible,
+           a.updatedAt = datetime()`,
+      { employeeNumber, newUsed, newRemaining, isEligible }
+    );
+
+    // Update request status
     await session.run(
       `MATCH (r:SalaryAdvanceRequest {requestId: $requestId})
        SET r.status = 'APPROVED', 
-           r.updatedAt = datetime(),
+           r.approvedAt = datetime(),
            r.adminRemarks = $adminRemarks,
-           r.reviewedBy = $reviewedBy,
-           r.reviewedAt = datetime()`,
+           r.reviewedBy = $reviewedBy`,
       { requestId, adminRemarks: adminRemarks || 'No remarks', reviewedBy: reviewedBy || 'Admin' }
     );
-    
-    console.log(`✅ Request ${requestId} approved`);
-    
-    // Send approval email (try, don't fail)
-    if (transporter) {
-      try {
-        // Email to employee
-        await transporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+
+
+    try {
+      if (employeeEmail) {
+        await sendEmail({
           to: employeeEmail,
           subject: '✅ Salary Advance Request Approved',
           html: `<h2>Request Approved</h2><p>Dear ${employeeName}, your salary advance request of ${currency} ${amount.toLocaleString()} has been APPROVED.</p><p>The amount will be credited within 5-7 business days.</p>`
         });
-        
-        // Email to admin
-        await transporter.sendMail({
-          from: process.env.SMTP_EMAIL,
-          to: process.env.ADMIN_EMAIL,
+      }
+
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (adminEmail) {
+        await sendEmail({
+          to: adminEmail,
           subject: `✅ Salary Advance Approved - ${employeeName}`,
           html: `<h2>Salary Advance Approved</h2><p>${employeeName}'s request of ${currency} ${amount.toLocaleString()} has been approved.</p>`
         });
-        
-        console.log('📧 Approval emails sent');
-      } catch (emailErr) {
-        console.log('⚠️ Email not sent:', emailErr.message);
       }
+    } catch (emailErr) {
+      console.log('⚠️ Email not sent:', emailErr.message);
     }
-    
+
     res.json({ success: true, message: 'Request approved successfully' });
   } catch (error) {
     console.error('❌ Error:', error);
@@ -627,69 +527,91 @@ router.put('/request/:requestId/reject', async (req, res) => {
   const { adminRemarks, reviewedBy } = req.body;
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
-    // Get request details
     const getResult = await session.run(
-      `MATCH (r:SalaryAdvanceRequest {requestId: $requestId})
-       RETURN r.employeeName AS employeeName, 
-              r.employeeEmail AS employeeEmail,
-              r.amount AS amount,
-              r.currency AS currency`,
+      `MATCH (r:SalaryAdvanceRequest {requestId: $requestId}) 
+       RETURN r.employeeName AS employeeName, r.currency AS currency, r.amount AS amount, r.employeeNumber AS employeeNumber`,
       { requestId }
     );
-    
+
     if (getResult.records.length === 0) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+
     const record = getResult.records[0];
     const employeeName = record.get('employeeName');
-    const employeeEmail = record.get('employeeEmail');
-    const amount = record.get('amount');
     const currency = record.get('currency');
-    
-    // Update status
+    const employeeNumber = record.get('employeeNumber');
+    let amount = record.get('amount');
+    if (typeof amount.toNumber === 'function') amount = amount.toNumber();
+    else amount = Number(amount);
+
     await session.run(
       `MATCH (r:SalaryAdvanceRequest {requestId: $requestId})
        SET r.status = 'REJECTED', 
            r.updatedAt = datetime(),
            r.adminRemarks = $adminRemarks,
-           r.reviewedBy = $reviewedBy,
-           r.reviewedAt = datetime()`,
+           r.reviewedBy = $reviewedBy`,
       { requestId, adminRemarks: adminRemarks || 'No remarks', reviewedBy: reviewedBy || 'Admin' }
     );
-    
-    console.log(`✅ Request ${requestId} rejected`);
-    
-    // Send rejection email (try, don't fail)
-    if (transporter) {
-      try {
-        // Email to employee
-        await transporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+
+    try {
+      const pResult = await session.run(`MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.emailId as emailId`, { employeeNumber });
+      const employeeEmail = pResult.records.length > 0 ? pResult.records[0].get('emailId') : null;
+      if (employeeEmail) {
+        await sendEmail({
           to: employeeEmail,
           subject: '❌ Salary Advance Request Rejected',
           html: `<h2>Request Rejected</h2><p>Dear ${employeeName}, your salary advance request of ${currency} ${amount.toLocaleString()} has been REJECTED.</p><p>Please contact HR for more information.</p>`
         });
-        
-        // Email to admin
-        await transporter.sendMail({
-          from: process.env.SMTP_EMAIL,
-          to: process.env.ADMIN_EMAIL,
-          subject: `❌ Salary Advance Rejected - ${employeeName}`,
-          html: `<h2>Salary Advance Rejected</h2><p>${employeeName}'s request of ${currency} ${amount.toLocaleString()} has been rejected.</p>`
-        });
-        
-        console.log('📧 Rejection emails sent');
-      } catch (emailErr) {
-        console.log('⚠️ Email not sent:', emailErr.message);
       }
+    } catch (emailErr) {
+      console.log('⚠️ Email not sent:', emailErr.message);
     }
-    
+
     res.json({ success: true, message: 'Request rejected' });
   } catch (error) {
-    console.error('❌ Error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// POST - Mark as Repaid
+router.post('/admin/repay/:employeeNumber', async (req, res) => {
+  const { employeeNumber } = req.params;
+  const { remarks, adminName } = req.body;
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const pResult = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.nationality as nationality`, { employeeNumber }
+    );
+    const nationality = pResult.records.length > 0 ? pResult.records[0].get('nationality') : 'INDIA';
+    const limit = getAmountLimit(nationality);
+
+    const result = await session.run(
+      `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       SET a.salaryAdvanceUsed = 0,
+           a.salaryAdvanceRemaining = $limitMax,
+           a.salaryAdvanceEligible = true,
+           a.isRepaid = true,
+           a.repaidDate = datetime(),
+           a.repaidBy = $adminName,
+           a.repaymentRemarks = $remarks,
+           a.updatedAt = datetime()
+       RETURN a`,
+      { employeeNumber, adminName: adminName || 'Admin', remarks: remarks || 'Repayment completed', limitMax: limit.max }
+    );
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: 'SalaryAdvanceAccount not found for this employee.' });
+    }
+
+    res.json({ success: true, message: 'Salary advance repayment recorded successfully.' });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();

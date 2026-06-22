@@ -33,7 +33,7 @@
     const session = driver.session();
 
     try {
-      console.log(`\n🔍 Checking if candidate ${candidateId} already in zone for client ${clientName}`);
+      // console.log(`\n🔍 Checking if candidate ${candidateId} already in zone for client ${clientName}`);
 
 
       // Check if candidate already has ANY zone entry for this client
@@ -69,9 +69,9 @@
           reason: existingZone.reason
         });
 
-        console.log(`🔄 Updating existing zone entry for candidate ${candidateId} with client ${clientName}`);
-        console.log(`   Old status: ${existingZone.rejectedStatus}, New status: ${status}`);
-        console.log(`   Old demand: ${existingZone.demandId}, New demand: ${demandId}`);
+        // console.log(`🔄 Updating existing zone entry for candidate ${candidateId} with client ${clientName}`);
+        // console.log(`   Old status: ${existingZone.rejectedStatus}, New status: ${status}`);
+        // console.log(`   Old demand: ${existingZone.demandId}, New demand: ${demandId}`);
 
         await session.run(`
         MATCH (z:Zone)
@@ -106,7 +106,7 @@
         return true;
       } else {
         // CREATE new entry
-        console.log(`✨ Creating new zone entry for candidate ${candidateId} with client ${clientName}`);
+        // console.log(`✨ Creating new zone entry for candidate ${candidateId} with client ${clientName}`);
 
         await session.run(`
           CREATE (z:Zone {
@@ -152,7 +152,7 @@
     const { demandId } = req.params;
     const { candidates, selectedBy } = req.body;
 
-    console.log(`\n📡 POST /api/selected-candidates/${demandId} - Saving candidates`);
+    // console.log(`\n📡 POST /api/selected-candidates/${demandId} - Saving candidates`);
 
     if (!demandId) {
       return res.status(400).json({ success: false, message: "Demand ID is required" });
@@ -349,8 +349,8 @@
   router.put("/status", async (req, res) => {
     const { candidateId, demandId, status, reason, changedBy } = req.body;
 
-    console.log(`\n📡 PUT /api/selected-candidates/status - Updating candidate ${candidateId} to ${status}`);
-    console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
+    // console.log(`\n📡 PUT /api/selected-candidates/status - Updating candidate ${candidateId} to ${status}`);
+    // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
 
     if (!candidateId || !demandId || !status) {
       return res.status(400).json({
@@ -383,8 +383,8 @@
       const demand = getResult.records[0].get('d').properties;
       const clientName = demand.client || demand.clientName || demand.ClientName;
 
-  console.log("DEMAND OBJECT:", demand);
-  console.log("CLIENT NAME VALUE:", clientName);
+  // console.log("DEMAND OBJECT:", demand);
+  // console.log("CLIENT NAME VALUE:", clientName);
 
       // Parse existing history
       let history = [];
@@ -433,7 +433,7 @@
     changedBy: changedByName
   });
 
-  console.log("UPDATE RESULT RECORDS:", updateResult.records.length);
+  // /console.log("UPDATE RESULT RECORDS:", updateResult.records.length);
 
   if (updateResult.records.length > 0) {
     console.log("✅ UPDATE SUCCESS");
@@ -478,13 +478,13 @@
         'Client Screening Reject'
       ];
 
-    console.log("🔍 ZONE DEBUG START");
-  console.log("Status received:", status);
-  console.log("Client Name:", clientName);
-  console.log("Candidate ID:", candidateId);
-  console.log("Demand ID:", demandId);
+  //   console.log("🔍 ZONE DEBUG START");
+  // console.log("Status received:", status);
+  // console.log("Client Name:", clientName);
+  // console.log("Candidate ID:", candidateId);
+  // console.log("Demand ID:", demandId);
 
-  console.log("Rejection Statuses:", rejectionStatuses);
+  // console.log("Rejection Statuses:", rejectionStatuses);
 
   console.log(
     "Includes Check:",
@@ -546,7 +546,7 @@
     console.log("❌ DID NOT ENTER ZONE CONDITION");
   }
 
-      console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
+      // console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
 
       // Return updated info
       res.json({
@@ -587,7 +587,7 @@
    */
   router.delete("/demand/:demandId/all", async (req, res) => {
     const { demandId } = req.params;
-    console.log(`\n📡 DELETE /api/selected-candidates/demand/${demandId}/all - Removing all selected candidates`);
+    // console.log(`\n📡 DELETE /api/selected-candidates/demand/${demandId}/all - Removing all selected candidates`);
 
     const session = driver.session();
 
@@ -602,7 +602,7 @@
 
       const deletedCount = result.records[0].get('deletedCount').toNumber();
 
-      console.log(`✅ Removed ${deletedCount} selected candidates for demand ${demandId}`);
+      // console.log(`✅ Removed ${deletedCount} selected candidates for demand ${demandId}`);
 
       res.json({
         success: true,
@@ -629,7 +629,7 @@
   router.get("/history/:demandId/:candidateId", async (req, res) => {
     const { demandId, candidateId } = req.params;
 
-    console.log(`\n📡 GET /api/selected-candidates/history/${demandId}/${candidateId} - Fetching candidate history`);
+    // console.log(`\n📡 GET /api/selected-candidates/history/${demandId}/${candidateId} - Fetching candidate history`);
 
     const driver = getDriver();
     const session = driver.session();
@@ -692,8 +692,8 @@
   router.put("/status-with-zone", async (req, res) => {
     const { candidateId, demandId, status, reason, changedBy } = req.body;
 
-    console.log(`\n📡 PUT /api/selected-candidates/status-with-zone - Updating candidate ${candidateId} to ${status}`);
-    console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
+    // console.log(`\n📡 PUT /api/selected-candidates/status-with-zone - Updating candidate ${candidateId} to ${status}`);
+    // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
 
     if (!candidateId || !demandId || !status) {
       return res.status(400).json({
@@ -892,7 +892,7 @@
   router.put("/demand/:demandId/update-status", async (req, res) => {
     const { demandId } = req.params;
 
-    console.log(`\n📡 PUT /api/selected-candidates/demand/${demandId}/update-status - Updating candidate statuses`);
+    // console.log(`\n📡 PUT /api/selected-candidates/demand/${demandId}/update-status - Updating candidate statuses`);
 
     const driver = getDriver();
     const session = driver.session();
@@ -952,7 +952,7 @@
   router.delete("/:demandId/:candidateId", async (req, res) => {
     const { demandId, candidateId } = req.params;
 
-    console.log(`\n📡 DELETE /api/selected-candidates/${demandId}/${candidateId} - Removing candidate`);
+    // console.log(`\n📡 DELETE /api/selected-candidates/${demandId}/${candidateId} - Removing candidate`);
 
     const driver = getDriver();
     const session = driver.session();
@@ -990,7 +990,7 @@
   router.delete("/:demandId", async (req, res) => {
     const { demandId } = req.params;
 
-    console.log(`\n📡 DELETE /api/selected-candidates/${demandId} - Clearing all selected candidates`);
+    // console.log(`\n📡 DELETE /api/selected-candidates/${demandId} - Clearing all selected candidates`);
 
     const driver = getDriver();
     const session = driver.session();

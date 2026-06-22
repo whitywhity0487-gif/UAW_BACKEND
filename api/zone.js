@@ -72,7 +72,6 @@ RETURN deletedCount
 
     const deletedCount = toNumber(result.records[0].get('deletedCount'));
     if (deletedCount > 0) {
-      console.log(`🗑️ Deleted zone entry for candidate ${candidateId} (client: ${clientName})`);
     }
     return deletedCount;
   } catch (err) {
@@ -90,7 +89,6 @@ RETURN deletedCount
  * =================================================
  */
 const autoCleanupExpiredZones = async () => {
-  console.log(`\n🧹 [AUTO CLEANUP] Checking for expired zone entries at ${new Date().toISOString()}`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -106,11 +104,9 @@ const autoCleanupExpiredZones = async () => {
     const expiredCount = findResult.records.length;
 
     if (expiredCount > 0) {
-      console.log(`📊 Found ${expiredCount} expired zone entries to delete`);
 
       // Log the expired entries
       findResult.records.forEach(record => {
-        console.log(`   - Candidate ${record.get('candidateId')} for client ${record.get('clientName')} (expired: ${record.get('expiryDate')})`);
       });
 
       // Delete expired entries
@@ -122,7 +118,6 @@ const autoCleanupExpiredZones = async () => {
       `);
 
       const deletedCount = toNumber(result.records[0].get('deletedCount'));
-      console.log(`✅ [AUTO CLEANUP] Successfully deleted ${deletedCount} expired zone entries`);
     } else {
       console.log(`✅ [AUTO CLEANUP] No expired zone entries found`);
     }
@@ -143,13 +138,9 @@ let cleanupInterval = null;
 
 const startAutoCleanup = () => {
   if (cleanupInterval) {
-    console.log('⚠️ Auto cleanup already running');
     return;
   }
 
-  console.log('\n' + '='.repeat(60));
-  console.log('🚀 STARTING AUTO CLEANUP SCHEDULER FOR ZONE ENTRIES');
-  console.log('='.repeat(60));
 
   // Run cleanup immediately on startup
   setTimeout(() => {
@@ -159,8 +150,7 @@ const startAutoCleanup = () => {
   // Run cleanup every hour (instead of 6 hours)
   cleanupInterval = setInterval(autoCleanupExpiredZones, 60 * 60 * 1000);
 
-  console.log('⏰ Auto cleanup scheduled to run every hour');
-  console.log('='.repeat(60) + '\n');
+  
 };
 
 /**
@@ -170,7 +160,6 @@ const stopAutoCleanup = () => {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
-    console.log('🛑 Auto cleanup stopped');
   }
 };
 
@@ -185,7 +174,6 @@ module.exports.autoCleanupExpiredZones = autoCleanupExpiredZones;
  * =================================================
  */
 router.get("/", async (req, res) => {
-  console.log(`\n📡 GET /api/zone - Fetching ALL zone entries`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -223,7 +211,6 @@ router.get("/", async (req, res) => {
     const activeCount = zoneEntries.filter(z => !z.isExpired).length;
     const expiredCount = zoneEntries.filter(z => z.isExpired).length;
 
-    console.log(`📊 Found ${zoneEntries.length} total zone entries (${activeCount} active, ${expiredCount} expired)`);
 
     res.json({
       success: true,
@@ -250,7 +237,6 @@ router.get("/", async (req, res) => {
  * GET /api/zone/active - Get ONLY active (non-expired) zone entries
  */
 router.get("/active", async (req, res) => {
-  console.log(`\n📡 GET /api/zone/active - Fetching active zone entries only`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -283,7 +269,6 @@ router.get("/active", async (req, res) => {
       };
     });
 
-    console.log(`📊 Found ${zoneEntries.length} active zone entries`);
 
     res.json({
       success: true,
@@ -308,7 +293,6 @@ router.get("/active", async (req, res) => {
  * GET /api/zone/expired - Get ONLY expired zone entries
  */
 router.get("/expired", async (req, res) => {
-  console.log(`\n📡 GET /api/zone/expired - Fetching expired zone entries only`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -341,7 +325,6 @@ router.get("/expired", async (req, res) => {
       };
     });
 
-    console.log(`📊 Found ${zoneEntries.length} expired zone entries`);
 
     res.json({
       success: true,
@@ -371,7 +354,6 @@ router.get("/expired", async (req, res) => {
 router.post("/add", async (req, res) => {
   const { candidateId, demandId, clientName, status, reason, rejectedBy } = req.body;
 
-  console.log(`\n📡 POST /api/zone/add - Processing candidate ${candidateId} for client: ${clientName}`);
 
   if (!candidateId || !demandId || !clientName) {
     return res.status(400).json({
@@ -419,10 +401,7 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
         reason: existingZone.reason
       });
 
-      console.log(`🔄 Found existing zone entry for candidate ${candidateId} (client: ${clientName})`);
-      console.log(`   Old demand: ${oldDemandId}, Old status: ${oldStatus}, Old expiry: ${oldExpiryDate}`);
-      console.log(`   New demand: ${demandId}, New status: ${status}, New expiry: ${expiryDate.toISOString()}`);
-
+    
       // Update the existing entry with new rejection details
       result = await session.run(`
     MATCH (z:Zone)
@@ -450,7 +429,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
         previousRejection: previousRejection  // Store as JSON string
       });
 
-      console.log(`✅ Updated existing zone entry for candidate ${candidateId} (client: ${clientName})`);
 
       const updatedZone = result.records[0].get('z').properties;
 
@@ -475,7 +453,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
       });
     } else {
       // No existing entry - CREATE new one
-      console.log(`✨ No existing zone entry found, creating new for candidate ${candidateId} (client: ${clientName})`);
 
       result = await session.run(`
         CREATE (z:Zone {
@@ -505,7 +482,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
 
       const zoneEntry = result.records[0].get('z').properties;
 
-      console.log(`✅ Created new zone entry for candidate ${candidateId} (client: ${clientName}) until ${expiryDate.toISOString()}`);
 
       res.json({
         success: true,
@@ -540,23 +516,23 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
 router.post("/manage", async (req, res) => {
   let { candidateId, clientName, demandId, status, reason, rejectedBy } = req.body;
 
-  console.log("\n" + "=".repeat(60));
-  console.log("🚨 ZONE MANAGE ENDPOINT CALLED 🚨");
-  console.log("=".repeat(60));
-  console.log("Raw request body:", JSON.stringify(req.body, null, 2));
-  console.log("candidateId:", candidateId, "type:", typeof candidateId);
-  console.log("clientName:", clientName);
-  console.log("demandId:", demandId);
-  console.log("status:", status, "type:", typeof status);
-  console.log("status length:", status?.length);
-  console.log("status trimmed:", status?.trim());
-  console.log("status === 'Offer Decline':", status === 'Offer Decline');
-  console.log("status.trim() === 'Offer Decline':", status?.trim() === 'Offer Decline');
-  console.log("ZONE_STATUSES:", ZONE_STATUSES);
-  console.log("isZoneStatus() result:", isZoneStatus(status));
+  // console.log("\n" + "=".repeat(60));
+  // console.log("🚨 ZONE MANAGE ENDPOINT CALLED 🚨");
+  // console.log("=".repeat(60));
+  // console.log("Raw request body:", JSON.stringify(req.body, null, 2));
+  // console.log("candidateId:", candidateId, "type:", typeof candidateId);
+  // console.log("clientName:", clientName);
+  // console.log("demandId:", demandId);
+  // console.log("status:", status, "type:", typeof status);
+  // console.log("status length:", status?.length);
+  // console.log("status trimmed:", status?.trim());
+  // console.log("status === 'Offer Decline':", status === 'Offer Decline');
+  // console.log("status.trim() === 'Offer Decline':", status?.trim() === 'Offer Decline');
+  // console.log("ZONE_STATUSES:", ZONE_STATUSES);
+  // console.log("isZoneStatus() result:", isZoneStatus(status));
 
   if (!candidateId || !clientName) {
-    console.log("❌ Missing required fields");
+    // console.log("❌ Missing required fields");
     return res.status(400).json({
       success: false,
       message: "candidateId and clientName are required"
@@ -576,19 +552,19 @@ router.post("/manage", async (req, res) => {
 
   try {
     if (isZoneStatus(status)) {
-      console.log("✅ Status is a zone status - Proceeding with zone creation");
+      // console.log("✅ Status is a zone status - Proceeding with zone creation");
 
       const now = new Date();
       const expiryDate = new Date(now);
       expiryDate.setMonth(expiryDate.getMonth() + 6);
 
-      console.log("Creating zone entry with:", {
-        candidateId: parseInt(candidateId),
-        clientName: clientName,
-        demandId: demandId ? parseInt(demandId) : null,
-        status: status,
-        expiryDate: expiryDate.toISOString()
-      });
+      // console.log("Creating zone entry with:", {
+      //   candidateId: parseInt(candidateId),
+      //   clientName: clientName,
+      //   demandId: demandId ? parseInt(demandId) : null,
+      //   status: status,
+      //   expiryDate: expiryDate.toISOString()
+      // });
 
       // Create zone entry directly without checking for existing
       const createResult = await session.run(`
@@ -636,10 +612,10 @@ rejectedBy: rejectedBy || 'Unknown',
 });
 
       if (createResult.records.length > 0) {
-        console.log("✅ Zone entry created/updated successfully!");
-        console.log("   Candidate ID:", candidateId);
-        console.log("   Status:", status);
-        console.log("   Expiry:", expiryDate.toISOString());
+        // console.log("✅ Zone entry created/updated successfully!");
+        // console.log("   Candidate ID:", candidateId);
+        // console.log("   Status:", status);
+        // console.log("   Expiry:", expiryDate.toISOString());
 
         res.json({
           success: true,
@@ -689,7 +665,7 @@ rejectedBy: rejectedBy || 'Unknown',
 router.get("/history/:candidateId/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
 
-  console.log(`\n📡 GET /api/zone/history/${candidateId}/${clientName} - Fetching zone history`);
+  // console.log(`\n📡 GET /api/zone/history/${candidateId}/${clientName} - Fetching zone history`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -737,7 +713,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
       };
     });
 
-    console.log(`📊 Found ${history.length} zone history entries for candidate ${candidateId} with client ${clientName}`);
 
     res.json({
       success: true,
@@ -768,7 +743,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
 router.get("/check/:candidateId/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
 
-  console.log(`\n📡 GET /api/zone/check/${candidateId}/${clientName} - Checking zone status`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -789,7 +763,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
     });
 
     if (result.records.length === 0) {
-      console.log(`✅ Candidate ${candidateId} is not in zone for client ${clientName}`);
       return res.json({
         success: true,
         inZone: false,
@@ -804,7 +777,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
 
     const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
 
-    console.log(`⚠️ Candidate ${candidateId} is in zone for client ${clientName} until ${expiryDate}`);
 
     res.json({
       success: true,
@@ -840,7 +812,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
 router.post("/check-multiple", async (req, res) => {
   const { candidateIds, clientName } = req.body;
 
-  console.log(`\n📡 POST /api/zone/check-multiple - Checking ${candidateIds?.length || 0} candidates for client: ${clientName}`);
 
   if (!candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
     return res.status(400).json({
@@ -901,7 +872,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
     }
 
     const inZoneCount = results.filter(r => r.inZone).length;
-    console.log(`📊 Zone check results: ${inZoneCount}/${candidateIds.length} candidates are in zone`);
 
     res.json({
       success: true,
@@ -931,7 +901,6 @@ AND toLower(trim(z.clientName)) = toLower(trim($clientName))
  * Remove expired zone entries (manual cleanup)
  */
 router.delete("/cleanup", async (req, res) => {
-  console.log(`\n📡 DELETE /api/zone/cleanup - Manual cleanup of expired zone entries`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -960,7 +929,6 @@ router.delete("/cleanup", async (req, res) => {
 
     const deletedCount = toNumber(result.records[0].get('deletedCount'));
 
-    console.log(`✅ Manual cleanup: Deleted ${deletedCount} expired zone entries`);
 
     res.json({
       success: true,
@@ -988,7 +956,6 @@ router.delete("/cleanup", async (req, res) => {
 router.get("/list/:clientName", async (req, res) => {
   const { clientName } = req.params;
 
-  console.log(`\n📡 GET /api/zone/list/${clientName} - Fetching active zone entries`);
 
   const driver = getDriver();
   const session = driver.session();
@@ -1020,7 +987,6 @@ router.get("/list/:clientName", async (req, res) => {
       };
     });
 
-    console.log(`📊 Found ${zoneEntries.length} active zone entries for client ${clientName}`);
 
     res.json({
       success: true,

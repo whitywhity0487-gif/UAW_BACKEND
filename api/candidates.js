@@ -13,8 +13,7 @@ require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
 // Update line 13
-const { uploadToDrive, uploadCandidateProfileResume, deleteFileFromDrive } = require('../services/googleDrive');// ============================================
-// GOOGLE DRIVE CONFIGURATION
+const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive');// GOOGLE DRIVE CONFIGURATION
 // ============================================
 const DRIVE_FOLDER_ID = '1Nehh6KSypnEo77JZqf2gVtkIwYIi8rgp'
 const TOKEN_PATH = path.join(__dirname, '../config/token.json');
@@ -593,26 +592,7 @@ router.get("/next-id", async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/candidates/check-email/{email}:
- *   get:
- *     summary: Check if email already exists
- *     tags: [Candidates]
- *     parameters:
- *       - in: path
- *         name: email
- *         required: true
- *         schema:
- *           type: string
- *       - in: query
- *         name: excludeId
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Successful response
- */
+
 router.get("/check-email/:email", async (req, res) => {
   const session = driver.session();
   const email = req.params.email;
@@ -653,26 +633,7 @@ router.get("/check-email/:email", async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/candidates/check-mobile/{mobile}:
- *   get:
- *     summary: Check if mobile number already exists
- *     tags: [Candidates]
- *     parameters:
- *       - in: path
- *         name: mobile
- *         required: true
- *         schema:
- *           type: string
- *       - in: query
- *         name: excludeId
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Successful response
- */
+
 router.get("/check-mobile/:mobile", async (req, res) => {
   const session = driver.session();
   const mobile = req.params.mobile;
@@ -718,9 +679,51 @@ router.get("/check-mobile/:mobile", async (req, res) => {
 // ============================================
 
 /**
- * GET /api/candidates/:candidateId/status
- * Get overall candidate status (for all clients)
+ * GET /api/candidates/personal-resume/:fileId
+ * Get personal resume by Google Drive file ID
  */
+router.get("/personal-resume/:fileId", async (req, res) => {
+  const { fileId } = req.params;
+  
+  try {
+    const { getDriveService } = require('../services/googleDrive');
+    const drive = await getDriveService();
+    
+    // Get file metadata to verify it exists and get download link
+    const file = await drive.files.get({
+      fileId: fileId,
+      fields: 'id,name,mimeType,webViewLink',
+      supportsAllDrives: true
+    });
+    
+    if (!file.data) {
+      return res.status(404).json({
+        success: false,
+        message: "Resume not found"
+      });
+    }
+    
+    // Return the view link so frontend can display the PDF
+    res.json({
+      success: true,
+      data: {
+        fileId: file.data.id,
+        fileName: file.data.name,
+        viewLink: file.data.webViewLink,
+        downloadLink: `https://drive.google.com/uc?export=download&id=${file.data.id}`
+      }
+    });
+    
+  } catch (err) {
+    console.error("❌ Error fetching personal resume:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch resume",
+      error: err.message
+    });
+  }
+});
+
 
 /**
  * GET /api/candidates/joined
@@ -899,7 +902,58 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
     await session.close();
   }
 });
+/**
+ * POST /api/candidates/upload-personal-resume
+ * Upload resume for personal details (stores in Personal Details folder)
+ */
+router.post("/upload-personal-resume", upload.single('resume'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No resume file provided"
+      });
+    }
 
+    console.log("📄 Personal Details Resume received:", {
+      originalname: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
+
+    // Upload to Personal Details folder using uploadResume function
+    const userId = req.body.userId || `user_${Date.now()}`;
+    const result = await uploadResume(req.file.buffer, req.file.originalname, req.file.mimetype, userId);
+
+    if (!result || !result.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to upload resume to Google Drive",
+        error: result?.error || "Unknown error"
+      });
+    }
+
+    // Return the Google Drive file info
+    res.json({
+      success: true,
+      message: "Resume uploaded successfully to Personal Details folder",
+      data: {
+        googleDriveFileId: result.fileId,
+        googleDriveViewLink: result.viewLink,
+        googleDriveDownloadLink: result.directLink,
+        fileName: result.fileName
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error uploading personal resume:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to upload resume",
+      error: err.message
+    });
+  }
+});
 /**
  * PUT /api/candidates/:candidateId/status-for-client/:clientName
  * Update candidate's status for a specific client

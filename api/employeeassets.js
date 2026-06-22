@@ -3,7 +3,6 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 
-console.log("✅ EMPLOYEE ASSETS ROUTES FILE LOADED SUCCESSFULLY");
 
 /* ================================
    TEST ROUTE
@@ -21,12 +20,11 @@ router.get("/ping", (req, res) => {
    Supports userId, username, or employeeNumber
 ================================ */
 
+
 router.get("/employee/:identifier", async (req, res) => {
   const { identifier } = req.params;
   const driver = getDriver();
   const session = driver.session();
-
-  console.log(`🔍 Fetching assets for employee: ${identifier}`);
 
   try {
     // First, find the employee's userId from PersonalDetails
@@ -50,21 +48,27 @@ router.get("/employee/:identifier", async (req, res) => {
       employeeUserId = employeeResult.records[0].get("userId");
       employeeNumber = employeeResult.records[0].get("employeeNumber") || "";
       employeeFullName = employeeResult.records[0].get("fullName") || "";
-      console.log(`✅ Found employee: ${employeeFullName} (${employeeUserId})`);
+    }
+
+    // Check if employeeNumber exists
+    if (!employeeNumber) {
+      return res.json({
+        success: true,
+        total: 0,
+        data: [],
+        message: "No employee number found for this user"
+      });
     }
 
     // Now fetch assets for this employee
     const result = await session.run(
       `
       MATCH (a:EmployeeAsset)
-      WHERE a.user_id = $userId 
-         OR a.username = $userId 
-         OR a.employee_id = $userId
-         OR a.employee_number = $employeeNumber
+      WHERE a.employee_number = $employeeNumber
       RETURN a
       ORDER BY a.submitted_date DESC
       `,
-      { userId: employeeUserId, employeeNumber: employeeNumber }
+      { employeeNumber: employeeNumber }
     );
 
     const assets = result.records.map(record => {
@@ -74,13 +78,12 @@ router.get("/employee/:identifier", async (req, res) => {
         try {
           a.assets = JSON.parse(a.assets);
         } catch(e) {
+          console.error("Error parsing assets:", e);
           a.assets = [];
         }
       }
       return a;
     });
-
-    console.log(`✅ Found ${assets.length} assets for employee: ${identifier}`);
 
     res.json({
       success: true,
@@ -90,6 +93,7 @@ router.get("/employee/:identifier", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error fetching employee assets:", err.message);
+    console.error("Error stack:", err.stack);
     res.status(500).json({
       success: false,
       message: err.message
@@ -120,9 +124,6 @@ router.get("/search", async (req, res) => {
       `
       MATCH (a:EmployeeAsset)
       WHERE a.employee_name CONTAINS $search
-         OR a.employee_id CONTAINS $search
-         OR a.username CONTAINS $search
-         OR a.user_id CONTAINS $search
          OR a.employee_number CONTAINS $search
          OR a.assets CONTAINS $search
       RETURN a
@@ -165,21 +166,14 @@ router.get("/search", async (req, res) => {
 ================================ */
 
 router.post("/", async (req, res) => {
-  const { employee_id, employee_name, username, user_id, employee_number, assets } = req.body;
+  const { employee_number, employee_name, assets } = req.body;
 
-  console.log("📦 Received assets submission:", { 
-    employee_id, 
-    employee_name, 
-    username,
-    user_id,
-    employee_number,
-    assetsCount: assets?.length 
-  });
+  console.log("Received payload:", { employee_number, employee_name, assets: assets?.length });
 
-  if ((!employee_id && !user_id && !username) || !employee_name || !assets || assets.length === 0) {
+  if (!employee_number || !employee_name || !assets || assets.length === 0) {
     return res.status(400).json({
       success: false,
-      message: "employee_id/user_id, employee_name, and assets are required"
+      message: "employee_number, employee_name, and assets are required"
     });
   }
 
@@ -187,47 +181,93 @@ router.post("/", async (req, res) => {
   const session = driver.session();
 
   try {
-    const assetId = `ASSET_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const submitted_date = new Date().toISOString().split('T')[0];
-    const created_at = new Date().toISOString();
-
+    const updated_at = new Date().toISOString();
     const assetsJson = JSON.stringify(assets);
 
-    const result = await session.run(
-      `
-      CREATE (a:EmployeeAsset {
-        id: $id,
-        employee_id: $employee_id,
-        user_id: $user_id,
-        employee_number: $employee_number,
-        employee_name: $employee_name,
-        username: $username,
-        assets: $assets,
-        submitted_date: $submitted_date,
-        created_at: $created_at,
-        status: $status
-      })
-      RETURN a.id AS id, a.employee_name AS employee_name
-      `,
-      {
-        id: assetId,
-        employee_id: employee_id || user_id || username,
-        user_id: user_id || employee_id || username,
-        employee_number: employee_number || "",
-        employee_name: employee_name,
-        username: username || employee_id || user_id,
-        assets: assetsJson,
-        submitted_date: submitted_date,
-        created_at: created_at,
-        status: "Submitted"
-      }
+    // Check if employee already has assets
+    const checkResult = await session.run(
+      `MATCH (a:EmployeeAsset {employee_number: $employee_number}) RETURN a`,
+      { employee_number }
     );
 
-    console.log(`✅ Assets submitted for employee: ${employee_name}`);
+    let assetId;
+
+    if (checkResult.records.length > 0) {
+      // Update existing record
+      const existingNode = checkResult.records[0].get('a');
+      assetId = existingNode.properties.id;
+
+      let currentAssets = [];
+      if (typeof existingNode.properties.assets === 'string') {
+        try { 
+          currentAssets = JSON.parse(existingNode.properties.assets); 
+        } catch (e) {
+          console.error("Error parsing existing assets:", e);
+        }
+      } else if (Array.isArray(existingNode.properties.assets)) {
+        currentAssets = existingNode.properties.assets;
+      }
+      
+      const newAssetsList = [...currentAssets, ...assets];
+      const newAssetsJson = JSON.stringify(newAssetsList);
+
+      const updateResult = await session.run(
+        `
+        MATCH (a:EmployeeAsset {employee_number: $employee_number})
+        SET a.assets = $assets,
+            a.updated_at = $updated_at,
+            a.submitted_date = $submitted_date,
+            a.employee_name = $employee_name
+        RETURN a.id AS id
+        `,
+        {
+          employee_number,
+          employee_name,
+          assets: newAssetsJson,
+          updated_at,
+          submitted_date
+        }
+      );
+      
+      if (updateResult.records.length > 0) {
+        assetId = updateResult.records[0].get("id");
+      }
+      
+    } else {
+      // Create new record
+      // Generate a proper ID
+      const timestamp = Date.now();
+      assetId = `ASSET_${employee_number}_${timestamp}`;
+      
+      await session.run(
+        `
+        CREATE (a:EmployeeAsset {
+          id: $id,
+          employee_number: $employee_number,
+          employee_name: $employee_name,
+          assets: $assets,
+          submitted_date: $submitted_date,
+          created_at: $created_at,
+          updated_at: $updated_at
+        })
+        RETURN a.id AS id
+        `,
+        {
+          id: assetId,
+          employee_number,
+          employee_name,
+          assets: assetsJson,
+          submitted_date,
+          created_at: updated_at,
+          updated_at
+        }
+      );
+    }
 
     res.status(201).json({
       success: true,
-      message: "Assets submitted successfully",
+      message: "Assets saved successfully",
       data: {
         id: assetId,
         employee_name: employee_name,
@@ -237,10 +277,12 @@ router.post("/", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ Error submitting assets:", err.message);
+    console.error("❌ Error saving assets:", err);
+    console.error("Error details:", err.stack);
     res.status(500).json({
       success: false,
-      message: err.message
+      message: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   } finally {
     await session.close();
@@ -287,18 +329,15 @@ router.put("/:assetId", async (req, res) => {
       `
       MATCH (a:EmployeeAsset {id: $assetId})
       SET a.assets = $assets,
-          a.updated_at = $updated_at,
-          a.status = $status
+          a.updated_at = $updated_at
       `,
       {
         assetId: assetId,
         assets: JSON.stringify(assets),
-        updated_at: updated_at,
-        status: "Updated"
+        updated_at: updated_at
       }
     );
 
-    console.log(`✅ Assets updated for ID: ${assetId}`);
 
     res.json({
       success: true,
@@ -353,7 +392,6 @@ router.delete("/:assetId", async (req, res) => {
       { assetId }
     );
 
-    console.log(`✅ Assets deleted for employee: ${employeeName} (Submitted: ${submittedDate})`);
 
     res.json({
       success: true,
@@ -385,14 +423,11 @@ router.get("/admin/all", async (req, res) => {
       RETURN 
         a.id AS id,
         a.employee_name AS employee_name,
-        a.employee_id AS employee_id,
-        a.user_id AS user_id,
         a.employee_number AS employee_number,
-        a.username AS username,
         a.assets AS assets,
         a.submitted_date AS submitted_date,
         a.created_at AS created_at,
-        a.status AS status
+        a.updated_at AS updated_at
       ORDER BY a.submitted_date DESC
     `);
 
@@ -408,14 +443,11 @@ router.get("/admin/all", async (req, res) => {
       return {
         id: record.get("id"),
         employee_name: record.get("employee_name"),
-        employee_id: record.get("employee_id") || record.get("user_id"),
-        user_id: record.get("user_id"),
         employee_number: record.get("employee_number"),
-        username: record.get("username"),
         assets: assetsData,
         submitted_date: record.get("submitted_date"),
         created_at: record.get("created_at"),
-        status: record.get("status")
+        updated_at: record.get("updated_at")
       };
     });
 

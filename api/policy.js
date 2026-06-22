@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 
-console.log("✅ POLICY ROUTES FILE LOADED SUCCESSFULLY");
 
 /* ================================
    TEST ROUTE
@@ -149,7 +148,6 @@ router.post("/", async (req, res) => {
       }
     );
 
-    console.log(`✅ Policy added: ${title}`);
 
     res.json({
       success: true,
@@ -225,7 +223,6 @@ router.put("/:policyId", async (req, res) => {
     }
 
     const record = result.records[0];
-    console.log(`✅ Policy updated: ${record.get("title")}`);
 
     res.json({
       success: true,
@@ -286,7 +283,6 @@ router.delete("/:policyId", async (req, res) => {
       { policyId }
     );
 
-    console.log(`✅ Policy deleted: ${policyTitle}`);
 
     res.json({
       success: true,

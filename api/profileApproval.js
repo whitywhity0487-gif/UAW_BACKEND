@@ -171,6 +171,11 @@ router.put("/admin/approve/:userId", async (req, res) => {
   
   const session = driver.session();
   const { userId } = req.params;
+  const { startDate } = req.body || {};
+
+  if (!startDate) {
+    return res.status(400).json({ success: false, message: "Start date is required to approve the profile" });
+  }
   
   try {
     // First get the current profile to preserve all data
@@ -192,6 +197,7 @@ router.put("/admin/approve/:userId", async (req, res) => {
     // Update profile: Set status to APPROVED, remove rejection fields
     cleanedProfile.profileStatus = 'APPROVED';
     cleanedProfile.profileApprovedAt = now;
+    cleanedProfile.employmentStartDate = startDate;
     cleanedProfile.updatedAt = now;
     delete cleanedProfile.profileRejectionReason;
     delete cleanedProfile.profileRejectedAt;
@@ -211,7 +217,6 @@ router.put("/admin/approve/:userId", async (req, res) => {
       return res.status(404).json({ success: false, message: "Profile not found" });
     }
     
-    console.log(`✅ Profile APPROVED for user: ${userId}`);
     
     res.json({ 
       success: true, 
@@ -284,9 +289,6 @@ router.put("/admin/reject/:userId", async (req, res) => {
     if (result.records.length === 0) {
       return res.status(404).json({ success: false, message: "Profile not found" });
     }
-    
-    console.log(`❌ Profile REJECTED for user: ${userId}`);
-    console.log(`   Reason: ${rejectionReason}`);
     
     res.json({ 
       success: true, 
@@ -456,7 +458,6 @@ router.put("/employee/resubmit/:userId", async (req, res) => {
       return res.status(404).json({ success: false, message: "Profile not found" });
     }
     
-    console.log(`🔄 Profile RESUBMITTED for user: ${userId}`);
     
     res.json({ 
       success: true, 

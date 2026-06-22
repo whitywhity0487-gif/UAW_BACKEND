@@ -13,13 +13,13 @@ const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", 
  * =================================================
  */
 router.get("/", async (req, res) => {
-  console.log("\n📡 GET /api/users - Fetching all users");
+  // console.log("\n📡 GET /api/users - Fetching all users");
   
   const driver = getDriver();
   const session = driver.session();
 
   try {
-    console.log("🔍 Executing Neo4j query...");
+    // console.log("🔍 Executing Neo4j query...");
     
     const result = await session.run(
       `MATCH (u:User)
@@ -31,7 +31,7 @@ router.get("/", async (req, res) => {
        ORDER BY u.createdAt DESC`
     );
 
-    console.log(`📊 Found ${result.records.length} users`);
+    // console.log(`📊 Found ${result.records.length} users`);
 
     const users = result.records.map(record => {
       const username = record.get("username");
@@ -74,8 +74,8 @@ router.get("/", async (req, res) => {
  * =================================================
  */
 router.post("/", async (req, res) => {
-  console.log("\n📡 POST /api/users - Creating new user");
-  console.log("Request body:", { ...req.body, password: "[HIDDEN]" });
+  // console.log("\n📡 POST /api/users - Creating new user");
+  // console.log("Request body:", { ...req.body, password: "[HIDDEN]" });
   
   const driver = getDriver();
   const session = driver.session();
@@ -170,12 +170,12 @@ router.post("/", async (req, res) => {
     const createdClient = createdUser.get("assignedClient");
     const createdDate = createdUser.get("createdAt");
 
-    console.log(`✅ User created successfully:`);
-    console.log(`   Username: ${createdUsername}`);
-    console.log(`   Role: ${createdRole}`);
-    if (createdClient) console.log(`   Assigned Client: ${createdClient}`);
-    console.log(`   PID: null`);
-    console.log(`   Created At: ${createdDate}`);
+    // console.log(`✅ User created successfully:`);
+    // console.log(`   Username: ${createdUsername}`);
+    // console.log(`   Role: ${createdRole}`);
+    // if (createdClient) console.log(`   Assigned Client: ${createdClient}`);
+    // console.log(`   PID: null`);
+    // console.log(`   Created At: ${createdDate}`);
 
     res.status(201).json({
       success: true,
@@ -207,7 +207,7 @@ router.post("/", async (req, res) => {
  * =================================================
  */
 router.post("/login", async (req, res) => {
-  console.log("\n📡 POST /api/users/login - User login");
+  // console.log("\n📡 POST /api/users/login - User login");
   
   const driver = getDriver();
   const session = driver.session();
@@ -262,8 +262,8 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    console.log(`✅ User logged in successfully: ${username} (${role})`);
-    console.log(`   PID: ${pid || "Not assigned yet (will be created when you submit personal details)"}`);
+    // console.log(`✅ User logged in successfully: ${username} (${role})`);
+    // console.log(`   PID: ${pid || "Not assigned yet (will be created when you submit personal details)"}`);
     if (assignedClient) console.log(`   Assigned client: ${assignedClient}`);
     if (assignedCompany) console.log(`   Assigned company: ${assignedCompany}`);
 
@@ -299,7 +299,7 @@ router.post("/login", async (req, res) => {
  * =================================================
  */
 router.put("/:username/pid", async (req, res) => {
-  console.log(`\n📡 PUT /api/users/${req.params.username}/pid - Updating PID`);
+  // console.log(`\n📡 PUT /api/users/${req.params.username}/pid - Updating PID`);
   
   const driver = getDriver();
   const session = driver.session();
@@ -314,8 +314,8 @@ router.put("/:username/pid", async (req, res) => {
       });
     }
 
-    console.log(`📝 Updating PID for user: ${username}`);
-    console.log(`   New PID: ${pid}`);
+    // console.log(`📝 Updating PID for user: ${username}`);
+    // console.log(`   New PID: ${pid}`);
 
     // Check if user exists
     const checkResult = await session.run(
@@ -360,7 +360,7 @@ router.put("/:username/pid", async (req, res) => {
     const updatedPid = updatedUser.get("pid");
     const updatedDate = updatedUser.get("createdAt");
 
-    console.log(`✅ PID updated successfully for ${username}: ${updatedPid}`);
+    // console.log(`✅ PID updated successfully for ${username}: ${updatedPid}`);
 
     res.json({
       success: true,
@@ -393,7 +393,7 @@ router.put("/:username/pid", async (req, res) => {
  * =================================================
  */
 router.put("/:username", async (req, res) => {
-  console.log(`\n📡 PUT /api/users/${req.params.username} - Updating user`);
+  // console.log(`\n📡 PUT /api/users/${req.params.username} - Updating user`);
   
   const driver = getDriver();
   const session = driver.session();
@@ -401,8 +401,8 @@ router.put("/:username", async (req, res) => {
   const { role, assignedClient, assignedCompany } = req.body;
 
   try {
-    console.log(`📝 Updating user: ${username}`);
-    console.log(`   New role: ${role}`);
+    // console.log(`📝 Updating user: ${username}`);
+    // console.log(`   New role: ${role}`);
     if (assignedClient) console.log(`   New assigned client: ${assignedClient}`);
     if (assignedCompany) console.log(`   New assigned company: ${assignedCompany}`);
 
@@ -533,14 +533,14 @@ else {
  * =================================================
  */
 router.delete("/:username", async (req, res) => {
-  console.log(`\n📡 DELETE /api/users/${req.params.username} - Deleting user`);
+  // console.log(`\n📡 DELETE /api/users/${req.params.username} - Deleting user`);
   
   const driver = getDriver();
   const session = driver.session();
   const { username } = req.params;
 
   try {
-    console.log(`🔍 Checking if user ${username} exists`);
+    // console.log(`🔍 Checking if user ${username} exists`);
 
     // Check if user exists
     const checkResult = await session.run(

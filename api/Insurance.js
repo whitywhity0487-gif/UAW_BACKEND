@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 
-console.log("✅ INSURANCE POLICY ROUTES FILE LOADED SUCCESSFULLY");
 
 /* ================================
    TEST ROUTE
@@ -36,7 +35,6 @@ router.get("/", async (req, res) => {
       return p;
     });
 
-    console.log(`✅ Found ${policies.length} insurance policies`);
 
     res.json({
       success: true,
@@ -199,7 +197,6 @@ router.post("/", async (req, res) => {
 
     const result = await session.run(createQuery, properties);
 
-    console.log(`✅ Insurance Policy added: ${policyData.policy_number}`);
 
     res.status(201).json({
       success: true,
@@ -279,7 +276,6 @@ router.put("/:policyId", async (req, res) => {
       params
     );
 
-    console.log(`✅ Insurance Policy updated: ${policyId}`);
 
     res.json({
       success: true,
@@ -354,7 +350,6 @@ router.patch("/:policyId", async (req, res) => {
       params
     );
 
-    console.log(`✅ Insurance Policy partially updated: ${policyId}`);
 
     res.json({
       success: true,
@@ -409,7 +404,6 @@ router.delete("/:policyId", async (req, res) => {
       { policyId }
     );
 
-    console.log(`✅ Insurance Policy deleted: ${policyNumber} - ${productName}`);
 
     res.json({
       success: true,

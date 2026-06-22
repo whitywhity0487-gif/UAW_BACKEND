@@ -72,7 +72,6 @@ const extractSkills = (skillsField) => {
 router.get("/", async (req, res) => {
   const { skill } = req.query;
 
-  console.log(`\n📡 GET /api/skillsmatch - Filtering by skill: "${skill}"`);
 
   if (!skill) {
     return res.status(400).json({
@@ -90,7 +89,6 @@ router.get("/", async (req, res) => {
       "MATCH (c:Candidate_Profile) RETURN c"
     );
 
-    console.log(`Found ${result.records.length} total candidates`);
 
     // Filter candidates that have the matching skill
     const candidates = [];
@@ -110,7 +108,6 @@ router.get("/", async (req, res) => {
       }
     });
 
-    console.log(`✅ Found ${candidates.length} candidates with skill: ${skill}`);
 
     res.json({
       success: true,

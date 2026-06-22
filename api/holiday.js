@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 
-console.log("✅ HOLIDAY ROUTES FILE LOADED SUCCESSFULLY");
 
 // Test route
 router.get("/ping", (req, res) => {
@@ -76,7 +75,6 @@ router.get("/companies", async (req, res) => {
   }
   
   try {
-    console.log(`📡 Fetching companies for client: ${client || 'all'}`);
     
     let result;
     if (client) {
@@ -114,7 +112,6 @@ router.get("/companies", async (req, res) => {
       id: record.get("id") || record.get("name")
     }));
     
-    console.log(`✅ Found ${companies.length} companies for client: ${client || 'all'}`);
     res.json({ success: true, data: companies });
     
   } catch (err) {
@@ -137,7 +134,6 @@ router.get("/companies/list", async (req, res) => {
   }
   
   try {
-    console.log("📡 Fetching companies list (alternative endpoint)...");
     
     const result = await session.run(`
       MATCH (g:Group)
@@ -154,7 +150,6 @@ router.get("/companies/list", async (req, res) => {
       client: record.get("client") || ""
     }));
     
-    console.log(`✅ Found ${companies.length} companies`);
     res.json({ success: true, data: companies });
     
   } catch (err) {
@@ -292,7 +287,6 @@ router.post("/add", async (req, res) => {
        CREATE (g)-[:HAS_HOLIDAY]->(h)`,
       { groupName, id: holidayId, name, date, day, type, notes: notes || "" }
     );
-    console.log(`✅ Holiday "${name}" added for ${groupName} with id ${holidayId}`);
     res.json({ success: true, message: "Holiday added successfully", data: { id: holidayId, name } });
   } catch (err) {
     console.error("❌ Error adding holiday:", err.message);
@@ -318,7 +312,6 @@ router.put("/:holidayId", async (req, res) => {
     if (result.records.length === 0) {
       return res.status(404).json({ success: false, message: "Holiday not found" });
     }
-    console.log(`✅ Holiday "${name}" updated successfully`);
     res.json({ success: true, message: "Holiday updated successfully" });
   } catch (err) {
     console.error("❌ Error updating holiday:", err.message);
@@ -333,7 +326,6 @@ router.delete("/:holidayId", async (req, res) => {
   const { holidayId } = req.params;
   const driver = getDriver();
 
-  console.log(`\n📡 DELETE /api/holiday/${holidayId} - Deleting holiday`);
 
   // Session 1: find the node
   const findSession = driver.session();
@@ -361,7 +353,6 @@ router.delete("/:holidayId", async (req, res) => {
       `MATCH (h:Holiday {id: $holidayId}) DETACH DELETE h`,
       { holidayId }
     );
-    console.log(`✅ Deleted holiday: "${holidayName}" (${holidayId})`);
     res.json({ success: true, message: `Holiday "${holidayName}" deleted successfully` });
   } catch (err) {
     console.error("❌ Error deleting holiday:", err.message);

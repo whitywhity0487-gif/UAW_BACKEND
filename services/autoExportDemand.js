@@ -25,7 +25,6 @@ async function getExistingDemandDriveFile() {
 // Delete old file and upload new one
 async function uploadAndReplaceDemand(filePath) {
   try {
-    console.log(`📤 Uploading demand file with replace mode...`);
     
     // Check for existing file
     const existingFile = await getExistingDemandDriveFile();
@@ -94,15 +93,15 @@ async function autoExportAndUploadDemand() {
   isExporting = true;
   const startTime = Date.now();
   
-  console.log('\n' + '='.repeat(60));
-  console.log('📊 DEMAND AUTO-EXPORT (DAILY REPLACE)');
-  console.log(`⏰ Time: ${new Date().toLocaleString()}`);
-  console.log('='.repeat(60));
+  // console.log('\n' + '='.repeat(60));
+  // console.log('📊 DEMAND AUTO-EXPORT (DAILY REPLACE)');
+  // console.log(`⏰ Time: ${new Date().toLocaleString()}`);
+  // console.log('='.repeat(60));
   
   try {
     const apiUrl = `http://localhost:${process.env.PORT || 5000}`;
     
-    console.log(`🌐 Fetching demands from: ${apiUrl}/api/demand`);
+    // console.log(`🌐 Fetching demands from: ${apiUrl}/api/demand`);
     const response = await axios.get(`${apiUrl}/api/demand`, {
       timeout: 30000,
       headers: { 'X-Company-Id': 'default' }
@@ -112,7 +111,7 @@ async function autoExportAndUploadDemand() {
     console.log(`✅ Fetched ${demands.length} demands`);
     
     if (demands.length === 0) {
-      console.log('⚠️ No demands found, skipping export');
+      // console.log('⚠️ No demands found, skipping export');
       return { success: false, error: 'No demands to export' };
     }
     
@@ -172,22 +171,22 @@ async function autoExportAndUploadDemand() {
     
     const filePath = path.join(exportDir, fileName);
     XLSX.writeFile(workbook, filePath);
-    console.log(`✅ Excel file created: ${fileName} (${(fs.statSync(filePath).size / 1024).toFixed(2)} KB)`);
+    // console.log(`✅ Excel file created: ${fileName} (${(fs.statSync(filePath).size / 1024).toFixed(2)} KB)`);
     
-    console.log('📤 Uploading to Google Drive (replacing old file)...');
+    // console.log('📤 Uploading to Google Drive (replacing old file)...');
     const driveResult = await uploadAndReplaceDemand(filePath);
     
     if (driveResult && driveResult.success) {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       
-      console.log('\n' + '🎉'.repeat(20));
-      console.log('✅ DEMAND EXPORT COMPLETED!');
-      console.log('-'.repeat(40));
-      console.log(`📊 Demands: ${demands.length}`);
-      console.log(`📁 File: ${driveResult.fileName}`);
-      console.log(`🔗 Drive Link: ${driveResult.viewLink}`);
-      console.log(`⏱️ Time: ${duration}s`);
-      console.log('🎉'.repeat(20));
+      // console.log('\n' + '🎉'.repeat(20));
+      // console.log('✅ DEMAND EXPORT COMPLETED!');
+      // console.log('-'.repeat(40));
+      // console.log(`📊 Demands: ${demands.length}`);
+      // console.log(`📁 File: ${driveResult.fileName}`);
+      // console.log(`🔗 Drive Link: ${driveResult.viewLink}`);
+      // console.log(`⏱️ Time: ${duration}s`);
+      // console.log('🎉'.repeat(20));
       
       // Save to history
       const historyFile = path.join(exportDir, 'demand_export_history.json');
@@ -227,7 +226,7 @@ async function autoExportAndUploadDemand() {
 }
 
 async function runDemandExportIfNeeded() {
-  console.log('\n🔍 Checking if today\'s demand export is needed...');
+  // console.log('\n🔍 Checking if today\'s demand export is needed...');
   const needed = await isDemandExportNeeded();
   
   if (needed) {
@@ -249,13 +248,13 @@ function startDemandAutoExportScheduler() {
     await autoExportAndUploadDemand();
   });
   
-  console.log('\n✅ Demand Auto-Export Scheduler Started!');
-  console.log('📅 Schedule: Every day at 2:05 AM');
-  console.log('🔄 Mode: REPLACE - Old file deleted, new file uploaded');
+  // console.log('\n✅ Demand Auto-Export Scheduler Started!');
+  // console.log('📅 Schedule: Every day at 2:05 AM');
+  // console.log('🔄 Mode: REPLACE - Old file deleted, new file uploaded');
 }
 
 async function manualDemandExport() {
-  console.log('\n🔧 Manual demand export triggered');
+  // console.log('\n🔧 Manual demand export triggered');
   return await autoExportAndUploadDemand();
 }
 

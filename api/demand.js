@@ -10,7 +10,6 @@ const getDriver = require("../lib/neo4j");
  * =================================================
  */
 router.get("/test", async (req, res) => {
-  console.log("\n📡 GET /api/demand/test - Called");
   
   // Get driver and create session
   const driver = getDriver();
@@ -22,7 +21,6 @@ router.get("/test", async (req, res) => {
     const message = result.records[0].get("message");
     const timestamp = result.records[0].get("timestamp");
     
-    console.log("✅ Test successful:", message);
     
     res.json({
       success: true,
@@ -48,14 +46,13 @@ router.get("/test", async (req, res) => {
  * =================================================
  */
 router.get("/clients/list", async (req, res) => {
-  console.log("\n📡 GET /api/demand/clients/list - Fetching unique client names");
  
   // Get driver and create session
   const driver = getDriver();
   const session = driver.session();
  
   try {
-    console.log("🔍 Executing Neo4j query for unique client names...");
+    // console.log("🔍 Executing Neo4j query for unique client names...");
     const result = await session.run(
       `MATCH (d:Demand)
        WHERE d.clientName IS NOT NULL AND d.clientName <> ''
@@ -63,13 +60,12 @@ router.get("/clients/list", async (req, res) => {
        ORDER BY d.clientName`
     );
  
-    console.log(`📊 Found ${result.records.length} unique client names`);
    
     const clients = result.records.map(record => ({
       name: record.get("clientName")
     }));
  
-    console.log("✅ Successfully fetched client names");
+  
     res.json({
       success: true,
       clients: clients
@@ -92,26 +88,23 @@ router.get("/clients/list", async (req, res) => {
  * =================================================
  */
 router.get("/", async (req, res) => {
-  console.log("\n📡 GET /api/demand - Fetching all demands");
   
   // Get driver and create session
   const driver = getDriver();
   const session = driver.session();
 
   try {
-    console.log("🔍 Executing Neo4j query...");
+    // console.log("🔍 Executing Neo4j query...");
     const result = await session.run(
       "MATCH (d:Demand) RETURN d ORDER BY d.createdDate DESC"
     );
 
-    console.log(`📊 Found ${result.records.length} demands`);
     
     const demands = result.records.map(r => {
       const d = r.get("d").properties;
       return d;
     });
 
-    console.log("✅ Successfully fetched demands");
     res.json(demands);
   } catch (err) {
     console.error("❌ Error fetching demands:", err.message);
@@ -130,7 +123,6 @@ router.get("/", async (req, res) => {
  * =================================================
  */
 router.get("/:id/client", async (req, res) => {
-  console.log(`\n📡 GET /api/demand/${req.params.id}/client - Fetching client name for demand`);
   
   // Get driver and create session
   const driver = getDriver();
@@ -138,14 +130,12 @@ router.get("/:id/client", async (req, res) => {
   const id = Number(req.params.id);
 
   try {
-    console.log(`🔍 Looking for demand with ID: ${id}`);
     const result = await session.run(
       "MATCH (d:Demand {id:$id}) RETURN d.clientName as clientName",
       { id }
     );
 
     if (!result.records.length) {
-      console.log(`❌ Demand with ID ${id} not found`);
       return res.status(404).json({ 
         success: false, 
         message: "Demand not found" 
@@ -154,7 +144,6 @@ router.get("/:id/client", async (req, res) => {
 
     const clientName = result.records[0].get("clientName");
     
-    console.log(`✅ Found client name: ${clientName} for demand ${id}`);
     res.json({
       success: true,
       demandId: id,
@@ -178,7 +167,6 @@ router.get("/:id/client", async (req, res) => {
  * =================================================
  */
 router.put("/:id", async (req, res) => {
-  console.log(`\n📡 PUT /api/demand/${req.params.id} - Updating demand`);
   
   const driver = getDriver();
   const session = driver.session();
@@ -227,7 +215,6 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ message: "Demand not found" });
     }
 
-    console.log(`✅ Successfully updated demand ${id}`);
     res.json({
       message: "Demand updated successfully",
       data: result.records[0].get("d").properties
@@ -249,7 +236,6 @@ router.put("/:id", async (req, res) => {
  * =================================================
  */
 router.post("/", async (req, res) => {
-  console.log("\n📡 POST /api/demand - Creating new demand");
   
   const driver = getDriver();
   const session = driver.session();
@@ -292,7 +278,6 @@ router.post("/", async (req, res) => {
 
     const created = result.records[0].get("d").properties;
 
-    console.log(`✅ Demand created successfully with ID: ${id}`);
 
     res.status(201).json({
       success: true,
@@ -319,7 +304,6 @@ router.post("/", async (req, res) => {
  * Manually trigger demand export
  */
 router.post("/export/trigger", async (req, res) => {
-  console.log("\n📡 POST /api/demand/export/trigger - Manual demand export triggered");
   
   try {
     const { manualDemandExport } = require('../services/autoExportDemand');
@@ -333,7 +317,6 @@ router.post("/export/trigger", async (req, res) => {
 
 // Add this GET version for browser testing (temporary)
 router.get("/export/trigger", async (req, res) => {
-  console.log("\n📡 GET /api/demand/export/trigger - Manual demand export triggered (GET)");
   
   try {
     const { manualDemandExport } = require('../services/autoExportDemand');
@@ -356,14 +339,12 @@ router.get("/export/trigger", async (req, res) => {
  * =================================================
  */
 router.delete("/:id", async (req, res) => {
-  console.log(`\n📡 DELETE /api/demand/${req.params.id} - Deleting demand`);
   
   const driver = getDriver();
   const session = driver.session();
   const id = Number(req.params.id);
 
   try {
-    console.log(`🔍 Checking if demand ID ${id} exists`);
     const checkResult = await session.run(
       "MATCH (d:Demand {id: $id}) RETURN d",
       { id }
@@ -377,7 +358,6 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    console.log(`🗑️ Deleting all relationships for demand ID ${id}`);
     
     // ✅ FIRST: Delete all relationships connected to this demand node
     // This includes any SELECTED_FOR relationships to candidates
@@ -386,7 +366,6 @@ router.delete("/:id", async (req, res) => {
       { id }
     );
     
-    console.log(`✅ Relationships deleted, now deleting demand node ID ${id}`);
     
     // ✅ SECOND: Delete the demand node itself
     await session.run(
@@ -394,7 +373,6 @@ router.delete("/:id", async (req, res) => {
       { id }
     );
 
-    console.log(`✅ Successfully deleted demand ${id} and all its relationships`);
     
     res.json({
       success: true,
