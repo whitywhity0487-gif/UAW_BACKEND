@@ -460,7 +460,7 @@
       const isInProgress = pendingStatuses.includes(status);
 
       try {
-        await axios.put(`http://localhost:5000/api/candidates/${candidateId}/progress`, {
+        await axios.put(`https://uaw-backend.vercel.app/api/candidates/${candidateId}/progress`, {
           isInProgress: isInProgress
         });
         console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
@@ -804,7 +804,7 @@
       const isInProgress = isActiveStatus;
 
       try {
-        await axios.put(`http://localhost:5000/api/candidates/${candidateId}/progress`, {
+        await axios.put(`https://uaw-backend.vercel.app/api/candidates/${candidateId}/progress`, {
           isInProgress: isInProgress
         });
         console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
@@ -819,7 +819,7 @@
         try {
           // Call the zone API to remove the candidate
           const zoneResponse = await axios.delete(
-            `http://localhost:5000/api/zone/remove/${candidateId}/${encodeURIComponent(clientName)}`
+            `https://uaw-backend.vercel.app/api/zone/remove/${candidateId}/${encodeURIComponent(clientName)}`
           );
           
           if (zoneResponse.data.success && zoneResponse.data.deletedCount > 0) {
@@ -837,7 +837,7 @@
         console.log(`🚫 Candidate ${candidateId} status changed to "${status}" (rejection) - Adding to Zone for client: ${clientName}`);
         
         try {
-          const zoneResponse = await axios.post(`http://localhost:5000/api/zone/manage`, {
+          const zoneResponse = await axios.post(`https://uaw-backend.vercel.app/api/zone/manage`, {
             candidateId: candidateId,
             clientName: clientName,
             demandId: demandId,
@@ -912,7 +912,7 @@
       let updatedCount = 0;
       for (const candidateId of candidateIds) {
         try {
-          await axios.put(`http://localhost:5000/api/candidates/${candidateId}/progress`, {
+          await axios.put(`https://uaw-backend.vercel.app/api/candidates/${candidateId}/progress`, {
             isInProgress: false
           });
           updatedCount++;
