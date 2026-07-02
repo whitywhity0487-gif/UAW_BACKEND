@@ -5,7 +5,7 @@ const bcrypt = require("bcrypt");
 // Import the shared driver helper
 const getDriver = require("../lib/neo4j");
 
-const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee"];
+const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR"];
 
 /**
  * =================================================
@@ -49,7 +49,7 @@ router.get("/", async (req, res) => {
       };
     });
 
-    console.log("✅ Users fetched successfully");
+    // console.log("✅ Users fetched successfully");
 
     res.json({
       success: true,
@@ -133,12 +133,12 @@ router.post("/", async (req, res) => {
       createdAt: new Date().toISOString()
     };
 
-    console.log(`📝 Creating user with data:`, {
-      username: neo4jData.username,
-      role: neo4jData.role,
-      assignedClient: neo4jData.assignedClient,
-      createdAt: neo4jData.createdAt
-    });
+    // console.log(`📝 Creating user with data:`, {
+    //   username: neo4jData.username,
+    //   role: neo4jData.role,
+    //   assignedClient: neo4jData.assignedClient,
+    //   createdAt: neo4jData.createdAt
+    // });
 
     // Create user in Neo4j
     const result = await session.run(
@@ -464,12 +464,12 @@ router.put("/:username", async (req, res) => {
 else if (role === "Employee") {
   // For Employee, remove both assignedClient and assignedCompany
   updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
-  console.log(`   Removing both assigned client and assigned company for Employee`);
+  // console.log(`   Removing both assigned client and assigned company for Employee`);
 }
 // For Admin and Recruiter, remove both assigned fields
 else {
   updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
-  console.log(`   Removing both assigned client and assigned company`);
+  // console.log(`   Removing both assigned client and assigned company`);
 }
     
     // Execute update

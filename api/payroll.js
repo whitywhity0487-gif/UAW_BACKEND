@@ -33,12 +33,6 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       }
     }
 
-    // Aggregate Approved Leaves for this user, month, and year
-    const leavesResult = await session.run(`
-      MATCH (l:LeaveRequest {employeeNumber: $employeeNumber, status: 'Approved'})
-      RETURN l
-    `, { employeeNumber });
-
     // Aggregate Approved Reimbursements for this user
     const reimbursementsResult = await session.run(`
       MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})-[:HAS_REIMBURSEMENT]->(r:Reimbursement {status: 'APPROVED'})
@@ -46,30 +40,56 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
     `, { employeeNumber });
 
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    
+    const monthIndex = monthNames.indexOf(month) + 1;
+    const monthStr = `${year}-${String(monthIndex).padStart(2, '0')}`;
+
     let totalAnnualLeave = 0;
     let totalLopDays = 0;
     let totalLopPercentage = 0;
     let deductionReasons = [];
 
-    leavesResult.records.forEach(record => {
-      const leave = record.get('l').properties;
-      if (!leave.startDate) return;
-      const leaveDate = new Date(leave.startDate);
-      const leaveMonth = monthNames[leaveDate.getMonth()];
-      const leaveYear = leaveDate.getFullYear().toString();
+    // Check for Approved/Locked Timesheet First
+    const timesheetResult = await session.run(`
+      OPTIONAL MATCH (pd:PersonalDetails {employeeNumber: $employeeNumber})
+      WITH coalesce(pd.userId, $employeeNumber) AS uid
+      MATCH (tr:TimesheetRecord {userId: uid, monthStr: $monthStr})
+      WHERE tr.status IN ['Approved', 'Locked']
+      RETURN tr
+    `, { employeeNumber, monthStr });
 
-      if (leaveMonth === month && leaveYear === year.toString()) {
-        const actualDays = leave.actualUsedDays !== undefined && leave.actualUsedDays !== null ? leave.actualUsedDays : (leave.totalDays || leave.numberOfDays || 0);
-        if (leave.isLOP) {
-          totalLopDays += (leave.lopDays || actualDays || 0);
-          totalLopPercentage += (leave.salaryDeductionPercentage || 0);
-          deductionReasons.push(`${leave.lopDays || actualDays || 0} days LOP (${leave.reason || 'Leave'})`);
-        } else {
-          totalAnnualLeave += (leave.annualLeaveDays || actualDays || 0);
-        }
+    if (timesheetResult.records.length > 0) {
+      const ts = timesheetResult.records[0].get('tr').properties;
+      totalLopDays = ts.totalLopDays || 0;
+      totalLopPercentage = totalLopDays * 2; // Default LOP penalty is 2% per day
+      if (totalLopDays > 0) {
+        deductionReasons.push(`${totalLopDays} days LOP (from Approved Timesheet)`);
       }
-    });
+    } else {
+      // Fallback to legacy LeaveRequest aggregation if no Timesheet is found
+      const leavesResult = await session.run(`
+        MATCH (l:LeaveRequest {employeeNumber: $employeeNumber, status: 'Approved'})
+        RETURN l
+      `, { employeeNumber });
+
+      leavesResult.records.forEach(record => {
+        const leave = record.get('l').properties;
+        if (!leave.startDate) return;
+        const leaveDate = new Date(leave.startDate);
+        const leaveMonth = monthNames[leaveDate.getMonth()];
+        const leaveYear = leaveDate.getFullYear().toString();
+
+        if (leaveMonth === month && leaveYear === year.toString()) {
+          const actualDays = leave.actualUsedDays !== undefined && leave.actualUsedDays !== null ? leave.actualUsedDays : (leave.totalDays || leave.numberOfDays || 0);
+          if (leave.isLOP) {
+            totalLopDays += (leave.lopDays || actualDays || 0);
+            totalLopPercentage += (leave.salaryDeductionPercentage || 0);
+            deductionReasons.push(`${leave.lopDays || actualDays || 0} days LOP (${leave.reason || 'Leave'})`);
+          } else {
+            totalAnnualLeave += (leave.annualLeaveDays || actualDays || 0);
+          }
+        }
+      });
+    }
 
     const parsedBaseSalary = parseFloat(baseSalary);
     const parsedAllowances = parseFloat(allowances) || 0;
@@ -88,7 +108,15 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       }
     });
 
-    const calculatedLopAmount = (parsedBaseSalary * (totalLopPercentage / 100));
+    const parsedYear = parseInt(year);
+    const parsedMonthIndex = monthNames.indexOf(month) + 1; // 1-12
+    const totalDaysInMonth = new Date(parsedYear, parsedMonthIndex, 0).getDate();
+    
+    // Calculate new Daily Salary based LOP
+    const dailySalary = parsedBaseSalary / totalDaysInMonth;
+    const workedDays = totalDaysInMonth - totalLopDays;
+    const calculatedLopAmount = dailySalary * totalLopDays;
+    
     const finalSalaryCalculated = parsedBaseSalary + parsedAllowances - parsedOtherDeductions - calculatedLopAmount + totalReimbursements;
     const finalReason = deductionReasons.join(', ');
     const now = new Date().toISOString();
@@ -105,6 +133,9 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       result = await session.run(`
         MATCH (p:PayrollRecord {employeeNumber: $employeeNumber, month: $month, year: $year})
         SET p.baseSalary = $baseSalary,
+            p.totalDaysInMonth = $totalDaysInMonth,
+            p.dailySalary = $dailySalary,
+            p.workedDays = $workedDays,
             p.allowances = $allowances,
             p.reimbursementsAmount = $reimbursementsAmount,
             p.otherDeductions = $otherDeductions,
@@ -123,12 +154,15 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       `, { 
         employeeNumber, month, year, employeeName: employeeName || '', 
         baseSalary: parsedBaseSalary, 
+        totalDaysInMonth,
+        dailySalary,
+        workedDays,
         allowances: parsedAllowances, 
         reimbursementsAmount: totalReimbursements,
         otherDeductions: parsedOtherDeductions,
         annualLeaveUsed: totalAnnualLeave,
         lopDays: totalLopDays,
-        lopDeductionPercentage: totalLopPercentage,
+        lopDeductionPercentage: 0, // Ignored logic
         lopDeductionAmount: calculatedLopAmount,
         deductionReason: finalReason,
         finalSalary: finalSalaryCalculated,
@@ -146,6 +180,9 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
           month: $month,
           year: $year,
           baseSalary: $baseSalary,
+          totalDaysInMonth: $totalDaysInMonth,
+          dailySalary: $dailySalary,
+          workedDays: $workedDays,
           allowances: $allowances,
           reimbursementsAmount: $reimbursementsAmount,
           otherDeductions: $otherDeductions,
@@ -163,12 +200,16 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         RETURN p
       `, { 
         id, employeeNumber, employeeName: employeeName || '', month, year, 
-        baseSalary: parsedBaseSalary, allowances: parsedAllowances, 
+        baseSalary: parsedBaseSalary, 
+        totalDaysInMonth,
+        dailySalary,
+        workedDays,
+        allowances: parsedAllowances, 
         reimbursementsAmount: totalReimbursements,
         otherDeductions: parsedOtherDeductions,
         annualLeaveUsed: totalAnnualLeave,
         lopDays: totalLopDays,
-        lopDeductionPercentage: totalLopPercentage,
+        lopDeductionPercentage: 0, // Ignored logic
         lopDeductionAmount: calculatedLopAmount,
         deductionReason: finalReason,
         finalSalary: finalSalaryCalculated, 
@@ -241,6 +282,53 @@ router.get("/user/:identifier", async (req, res) => {
   } catch (error) {
     console.error("Error fetching user payroll:", error);
     res.status(500).json({ success: false, message: "Failed to fetch user payroll" });
+  } finally {
+    await session.close();
+  }
+});
+
+// Temporary Migration Endpoint
+router.get("/admin/migrate", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const result = await session.run(`MATCH (p:PayrollRecord) RETURN p`);
+    const records = result.records.map(record => record.get('p').properties);
+    
+    let updatedCount = 0;
+    for (const record of records) {
+      const year = parseInt(record.year);
+      const monthIndex = monthNames.indexOf(record.month) + 1;
+      const totalDaysInMonth = new Date(year, monthIndex, 0).getDate();
+      
+      const baseSalary = record.baseSalary || 0;
+      const lopDays = record.lopDays || 0;
+      const allowances = record.allowances || 0;
+      const reimbursements = record.reimbursementsAmount || 0;
+      const otherDeductions = record.otherDeductions || 0;
+      
+      const dailySalary = baseSalary / totalDaysInMonth;
+      const workedDays = totalDaysInMonth - lopDays;
+      const newLopDeduction = dailySalary * lopDays;
+      const newFinalSalary = baseSalary + allowances + reimbursements - otherDeductions - newLopDeduction;
+      
+      await session.run(`
+        MATCH (p:PayrollRecord {id: $id})
+        SET p.totalDaysInMonth = $totalDaysInMonth,
+            p.dailySalary = $dailySalary,
+            p.workedDays = $workedDays,
+            p.lopDeductionAmount = $newLopDeduction,
+            p.finalSalary = $newFinalSalary
+      `, {
+        id: record.id, totalDaysInMonth, dailySalary, workedDays, newLopDeduction, newFinalSalary
+      });
+      updatedCount++;
+    }
+    res.json({ success: true, message: `Successfully migrated ${updatedCount} records.` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();
   }

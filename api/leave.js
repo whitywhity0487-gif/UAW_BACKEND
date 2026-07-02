@@ -14,31 +14,64 @@ const DEFAULT_ANNUAL_LEAVE = 11;
 
 // Helper to calculate leave balance stats
 const calculateBalances = (leaves) => {
-  let annualUsed = 0;
   let wfhUsed = 0;
-  
-  // Pending counts
+  let rawAnnualUsed = 0;
   let pendingAnnual = 0;
+
+  const currentMonth = new Date().getMonth();
+  const currentYear = new Date().getFullYear();
+
+  let monthlyRawAL = 0;
+  let monthlyWFH = 0;
 
   leaves.forEach(leave => {
     const days = leave.actualUsedDays !== undefined && leave.actualUsedDays !== null 
       ? parseFloat(leave.actualUsedDays) 
       : (parseFloat(leave.totalDays) || 0);
+      
+    let isThisMonth = false;
+    if (leave.startDate) {
+      const ld = new Date(leave.startDate);
+      isThisMonth = ld.getMonth() === currentMonth && ld.getFullYear() === currentYear;
+    }
+      
     if (leave.status === 'Approved') {
-      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') annualUsed += days;
-      else if (leave.leaveType === 'Work From Home') wfhUsed += days;
+      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
+        rawAnnualUsed += days;
+        if (isThisMonth) monthlyRawAL += days;
+      } else if (leave.leaveType === 'Work From Home') {
+        wfhUsed += days;
+        if (isThisMonth) monthlyWFH += days;
+      }
     } else if (leave.status === 'Pending') {
-      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') pendingAnnual += days;
+      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
+        pendingAnnual += days;
+      }
     }
   });
+
+  const annualUsed = Math.min(rawAnnualUsed, DEFAULT_ANNUAL_LEAVE);
+  const lopUsed = Math.max(0, rawAnnualUsed - DEFAULT_ANNUAL_LEAVE);
+  
+  const rawAnnualBeforeThisMonth = rawAnnualUsed - monthlyRawAL;
+  const lopBeforeThisMonth = Math.max(0, rawAnnualBeforeThisMonth - DEFAULT_ANNUAL_LEAVE);
+  const monthlyLOP = lopUsed - lopBeforeThisMonth;
+  const monthlyAL = monthlyRawAL - monthlyLOP;
+  
+  const availableBeforePending = Math.max(0, DEFAULT_ANNUAL_LEAVE - rawAnnualUsed);
+  const annualBalance = availableBeforePending - pendingAnnual;
 
   return {
     annualEntitlement: DEFAULT_ANNUAL_LEAVE,
     annualUsed,
     annualPending: pendingAnnual,
-    annualBalance: DEFAULT_ANNUAL_LEAVE - annualUsed - pendingAnnual,
+    annualBalance,
     
     wfhUsed,
+    lopUsed,
+    monthlyAL,
+    monthlyWFH,
+    monthlyLOP,
     totalSubmitted: leaves.length,
     pendingRequests: leaves.filter(l => l.status === 'Pending').length,
     approvedRequests: leaves.filter(l => l.status === 'Approved').length,
@@ -55,11 +88,22 @@ router.get("/user/:userId", async (req, res) => {
   try {
     const result = await session.run(`
       MATCH (l:LeaveRequest {userId: $userId})
-      RETURN l
+      OPTIONAL MATCH (u:User {username: $userId})-[:SUPERVISES]->(anyTeam:Team)
+      RETURN l, COUNT(anyTeam) > 0 AS isRequesterSupervisor
       ORDER BY l.createdAt DESC
     `, { userId });
 
-    const leaves = result.records.map(record => record.get('l').properties);
+    const leaves = result.records.map(record => {
+      const l = record.get('l').properties;
+      const isRequesterSupervisor = record.get('isRequesterSupervisor');
+      
+      if (isRequesterSupervisor && l.supervisorStatus !== 'N/A') {
+        l.supervisorStatus = 'N/A';
+        if (l.hrStatus === 'Approved') l.status = 'Approved';
+        if (l.hrStatus === 'Rejected') l.status = 'Rejected';
+      }
+      return l;
+    });
     const balances = calculateBalances(leaves);
 
     res.json({
@@ -84,7 +128,7 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     const { 
       userId, employeeName, employeeNumber, company, 
       leaveType, startDate, startTime, endDate, endTime, 
-      totalDays, reason, customReason 
+      totalDays, reason, customReason, role
     } = req.body;
 
     if (!userId || !startDate || !endDate || !reason || !leaveType) {
@@ -106,9 +150,10 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     let lopDays = 0;
     
     if (leaveType === 'Annual Leave' || leaveType === 'Leave') {
-      if (daysRequested > balances.annualBalance) {
-        annualLeaveDays = balances.annualBalance;
-        lopDays = daysRequested - balances.annualBalance;
+      const currentBalance = Math.max(0, balances.annualBalance);
+      if (daysRequested > currentBalance) {
+        annualLeaveDays = currentBalance;
+        lopDays = daysRequested - currentBalance;
       }
     }
     
@@ -118,6 +163,14 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     const leaveId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     
+    // Check if requester supervises any team
+    const checkSupResult = await session.run(`
+      MATCH (u:User {username: $userId})
+      OPTIONAL MATCH (u)-[:SUPERVISES]->(anyTeam:Team)
+      RETURN COUNT(anyTeam) > 0 AS isRequesterSupervisor
+    `, { userId });
+    const isRequesterSupervisor = checkSupResult.records.length > 0 ? checkSupResult.records[0].get('isRequesterSupervisor') : false;
+
     // Create Leave Request
     const result = await session.run(`
       CREATE (l:LeaveRequest {
@@ -141,6 +194,8 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
         reason: $reason,
         customReason: $customReason,
         status: 'Pending',
+        supervisorStatus: $initialSupervisorStatus,
+        hrStatus: 'Pending',
         createdAt: $createdAt
       })
       RETURN l
@@ -149,26 +204,45 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       company: company || '', leaveType, startDate, startTime: startTime || '',
       endDate, endTime: endTime || '', totalDays: daysRequested, 
       annualLeaveDays, lopDays, isLOP, salaryDeductionPercentage, reason,
-      customReason: customReason || '', createdAt
+      customReason: customReason || '', createdAt,
+      initialSupervisorStatus: isRequesterSupervisor ? 'N/A' : 'Pending'
     });
 
-    // Find supervisor and send notification
+    // Find supervisor and send notification (only if they are an employee)
     const notificationMsg = isLOP 
       ? `Loss Of Pay Leave Request - Employee Name: ${employeeName || userId}, Requested Days: ${daysRequested}, LOP Days: ${lopDays}`
       : `${employeeName || userId} submitted a ${leaveType} request.`;
       
+    if (!isRequesterSupervisor) {
+      await session.run(`
+        MATCH (u:User {username: $userId})-[:MEMBER_OF]->(t:Team)<-[:SUPERVISES]-(s:User)
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: s.username,
+          message: $message,
+          type: 'LEAVE_REQUEST',
+          relatedId: $leaveId,
+          isRead: false,
+          createdAt: $createdAt
+        })
+      `, { userId, message: notificationMsg, leaveId, createdAt });
+    }
+
+    // Find HR and send notification
     await session.run(`
-      MATCH (u:User {username: $userId})-[:MEMBER_OF]->(t:Team)<-[:SUPERVISES]-(s:User)
+      MATCH (hr:User)
+      WHERE hr.role = 'HR'
+      
       CREATE (n:Notification {
         id: randomUUID(),
-        userId: s.username,
+        userId: hr.username,
         message: $message,
         type: 'LEAVE_REQUEST',
         relatedId: $leaveId,
         isRead: false,
         createdAt: $createdAt
       })
-    `, { userId, message: notificationMsg, leaveId, createdAt });
+    `, { message: notificationMsg, leaveId, createdAt });
 
     res.json({
       success: true,
@@ -192,11 +266,22 @@ router.get("/all", async (req, res) => {
   try {
     const result = await session.run(`
       MATCH (l:LeaveRequest)
-      RETURN l
+      OPTIONAL MATCH (u:User {username: l.userId})-[:SUPERVISES]->(anyTeam:Team)
+      RETURN l, COUNT(anyTeam) > 0 AS isRequesterSupervisor
       ORDER BY l.createdAt DESC
     `);
     
-    const leaves = result.records.map(record => record.get('l').properties);
+    const leaves = result.records.map(record => {
+      const l = record.get('l').properties;
+      const isRequesterSupervisor = record.get('isRequesterSupervisor');
+      
+      if (isRequesterSupervisor && l.supervisorStatus !== 'N/A') {
+        l.supervisorStatus = 'N/A';
+        if (l.hrStatus === 'Approved') l.status = 'Approved';
+        if (l.hrStatus === 'Rejected') l.status = 'Rejected';
+      }
+      return l;
+    });
     res.json({ success: true, data: leaves });
   } catch (error) {
     console.error("Error fetching all leaves:", error);
@@ -211,27 +296,66 @@ router.put("/status/:id", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
   const { id } = req.params;
-  const { status, remarks } = req.body;
+  const { status, remarks, approverRole, approverId } = req.body;
   
   try {
     if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
-    const result = await session.run(`
+    // Get current leave request and check if requester supervises any team
+    const getResult = await session.run(`
       MATCH (l:LeaveRequest {id: $id})
-      SET l.status = $status, l.adminRemarks = $remarks, l.updatedAt = $updatedAt
-      RETURN l
-    `, { id, status, remarks: remarks || '', updatedAt: new Date().toISOString() });
-
-    if (result.records.length === 0) {
+      OPTIONAL MATCH (u:User {username: l.userId})-[:SUPERVISES]->(t:Team)
+      RETURN l, COUNT(t) > 0 AS isRequesterSupervisor
+    `, { id });
+    
+    if (getResult.records.length === 0) {
       return res.status(404).json({ success: false, message: "Leave request not found" });
     }
+    const currentLeave = getResult.records[0].get('l').properties;
+    const isRequesterSupervisor = getResult.records[0].get('isRequesterSupervisor');
+
+    let newSupervisorStatus = currentLeave.supervisorStatus || 'Pending';
+    let newHrStatus = currentLeave.hrStatus || 'Pending';
+    
+    if (isRequesterSupervisor && newSupervisorStatus !== 'N/A') {
+      newSupervisorStatus = 'N/A'; // Patch old data dynamically
+    }
+
+    if (approverRole === 'Supervisor') {
+      newSupervisorStatus = status;
+    } else if (approverRole === 'HR') {
+      newHrStatus = status;
+    } else {
+      // Fallback for admin or old logic
+      newSupervisorStatus = status;
+      newHrStatus = status;
+    }
+
+    let newOverallStatus = 'Pending';
+    if (newSupervisorStatus === 'Rejected' || newHrStatus === 'Rejected') {
+      newOverallStatus = 'Rejected';
+    } else if ((newSupervisorStatus === 'Approved' || newSupervisorStatus === 'N/A') && newHrStatus === 'Approved') {
+      newOverallStatus = 'Approved';
+    } else {
+      newOverallStatus = 'Pending'; // e.g. Waiting for HR or Waiting for Supervisor
+    }
+
+    const result = await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      SET l.status = $newOverallStatus, 
+          l.supervisorStatus = $newSupervisorStatus,
+          l.hrStatus = $newHrStatus,
+          l.adminRemarks = coalesce(l.adminRemarks, '') + '\n' + coalesce($remarks, ''), 
+          l.updatedAt = $updatedAt
+      RETURN l
+    `, { id, newOverallStatus, newSupervisorStatus, newHrStatus, remarks: remarks || '', updatedAt: new Date().toISOString() });
     
     const leave = result.records[0].get('l').properties;
 
-    // Update payroll if LOP and approved
-    if (status === 'Approved' && leave.isLOP) {
+    // Update payroll only if LOP and overall status is newly Approved
+    if (newOverallStatus === 'Approved' && currentLeave.status !== 'Approved' && leave.isLOP) {
       const leaveStartDate = new Date(leave.startDate);
       const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
       const leaveMonth = monthNames[leaveStartDate.getMonth()];
@@ -244,13 +368,19 @@ router.put("/status/:id", async (req, res) => {
       
       if (payrollResult.records.length > 0) {
         const payroll = payrollResult.records[0].get('p').properties;
-        const lopDeductionAmount = (payroll.baseSalary * (leave.salaryDeductionPercentage / 100));
+        
+        const parsedYear = parseInt(leaveYear);
+        const parsedMonthIndex = monthNames.indexOf(leaveMonth) + 1;
+        const totalDaysInMonth = new Date(parsedYear, parsedMonthIndex, 0).getDate();
+        
+        const dailySalary = payroll.baseSalary / totalDaysInMonth;
+        const lopDeductionAmount = dailySalary * leave.lopDays;
         
         await session.run(`
           MATCH (p:PayrollRecord {userId: $userId, month: $month, year: $year})
           SET p.annualLeaveUsed = p.annualLeaveUsed + $annualLeaveDays,
               p.lopDays = p.lopDays + $lopDays,
-              p.lopDeductionPercentage = p.lopDeductionPercentage + $lopPercentage,
+              p.workedDays = coalesce(p.workedDays, $totalDaysInMonth) - $lopDays,
               p.lopDeductionAmount = coalesce(p.lopDeductionAmount, 0) + $deductionAmount,
               p.finalSalary = p.baseSalary + p.allowances - p.otherDeductions - (coalesce(p.lopDeductionAmount, 0) + $deductionAmount),
               p.deductionReason = 'Annual Leave balance exhausted. Additional leave days were treated as Loss Of Pay (LOP).',
@@ -258,7 +388,7 @@ router.put("/status/:id", async (req, res) => {
         `, {
           userId: leave.userId, month: leaveMonth, year: leaveYear,
           annualLeaveDays: leave.annualLeaveDays, lopDays: leave.lopDays,
-          lopPercentage: leave.salaryDeductionPercentage, deductionAmount: lopDeductionAmount,
+          totalDaysInMonth, deductionAmount: lopDeductionAmount,
           updatedAt: new Date().toISOString()
         });
         
@@ -269,14 +399,22 @@ router.put("/status/:id", async (req, res) => {
       }
     }
 
-    // Mark the supervisor's notification as read (so it stops showing)
-    await session.run(`
-      MATCH (n:Notification {relatedId: $leaveId, type: 'LEAVE_REQUEST'})
-      SET n.isRead = true
-    `, { leaveId: id });
+    // Mark the specific approver's notification as read
+    if (approverId) {
+      await session.run(`
+        MATCH (n:Notification {relatedId: $leaveId, type: 'LEAVE_REQUEST', userId: $approverId})
+        SET n.isRead = true
+      `, { leaveId: id, approverId });
+    } else {
+      await session.run(`
+        MATCH (n:Notification {relatedId: $leaveId, type: 'LEAVE_REQUEST'})
+        SET n.isRead = true
+      `, { leaveId: id });
+    }
 
-    // Send notification to employee
-    let employeeMessage = `Your ${leave.leaveType} request has been ${status}.`;
+    // Send notification to employee only when overall status is resolved
+    if (newOverallStatus === 'Approved' || newOverallStatus === 'Rejected') {
+      let employeeMessage = `Your ${leave.leaveType} request has been ${newOverallStatus}.`;
     if (status === 'Approved' && leave.isLOP) {
       employeeMessage += ` Note: ${leave.lopDays} days were treated as Loss Of Pay (LOP).`;
     }
@@ -297,10 +435,11 @@ router.put("/status/:id", async (req, res) => {
       leaveId: leave.id,
       createdAt: new Date().toISOString()
     });
+    }
 
     res.json({
       success: true,
-      message: `Leave request ${status.toLowerCase()} successfully`,
+      message: `Leave request updated successfully. Overall status: ${newOverallStatus}`,
       data: leave
     });
   } catch (error) {
@@ -321,15 +460,65 @@ router.get("/team/:supervisorId", async (req, res) => {
     const result = await session.run(`
       MATCH (s:User {username: $supervisorId})-[:SUPERVISES]->(t:Team)<-[:MEMBER_OF]-(m:User)
       MATCH (l:LeaveRequest {userId: m.username})
-      RETURN l
+      OPTIONAL MATCH (m)-[:SUPERVISES]->(anyTeam:Team)
+      RETURN l, COUNT(anyTeam) > 0 AS isRequesterSupervisor
       ORDER BY l.createdAt DESC
     `, { supervisorId });
 
-    const leaves = result.records.map(record => record.get('l').properties);
+    const leaves = result.records.map(record => {
+      const l = record.get('l').properties;
+      const isRequesterSupervisor = record.get('isRequesterSupervisor');
+      
+      if (isRequesterSupervisor && l.supervisorStatus !== 'N/A') {
+        l.supervisorStatus = 'N/A';
+        if (l.hrStatus === 'Approved') l.status = 'Approved';
+        if (l.hrStatus === 'Rejected') l.status = 'Rejected';
+      }
+      return l;
+    });
     res.json({ success: true, data: leaves });
   } catch (error) {
     console.error("Error fetching team leaves:", error);
     res.status(500).json({ success: false, message: "Failed to fetch team leaves" });
+  } finally {
+    await session.close();
+  }
+});
+
+// 5b. Get all leaves for an HR's team
+router.get("/hr/:hrId", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { hrId } = req.params;
+
+  try {
+    const result = await session.run(`
+      MATCH (h:User {username: $hrId})-[:HR_FOR]->(t:Team)
+      MATCH (t)<-[:MEMBER_OF|SUPERVISES]-(m:User)
+      MATCH (l:LeaveRequest {userId: m.username})
+      WITH DISTINCT l, m
+      OPTIONAL MATCH (m)-[:SUPERVISES]->(anyTeam:Team)
+      RETURN l, COUNT(anyTeam) > 0 AS isSupervisor
+      ORDER BY l.createdAt DESC
+    `, { hrId });
+
+    const leaves = result.records.map(record => {
+      const l = record.get('l').properties;
+      const isSupervisor = record.get('isSupervisor');
+      
+      // Patch old data on the fly for Supervisors
+      if (isSupervisor && l.supervisorStatus !== 'N/A') {
+        l.supervisorStatus = 'N/A';
+        if (l.hrStatus === 'Approved') l.status = 'Approved';
+        if (l.hrStatus === 'Rejected') l.status = 'Rejected';
+      }
+      return l;
+    });
+    
+    res.json({ success: true, data: leaves });
+  } catch (error) {
+    console.error("Error fetching hr team leaves:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch hr team leaves" });
   } finally {
     await session.close();
   }

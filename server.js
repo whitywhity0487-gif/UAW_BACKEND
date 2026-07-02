@@ -127,6 +127,8 @@ app.use("/api/leave", require("./api/leave"));
 app.use("/api/payroll", require("./api/payroll"));
 app.use("/api/teams", require("./api/teams"));
 app.use("/api/notifications", require("./api/notifications"));
+app.use("/api/allocations", require("./api/allocations"));
+app.use("/api/timesheet", require("./api/timesheet"));
 
 /* ================================
    TEST ROUTE

@@ -383,13 +383,13 @@ router.get("/check-access", async (req, res) => {
     const role = result.records[0].get("role") || "";
     const status = result.records[0].get("status") || "PENDING";
     
-    // Admins and Recruiters always have access, regardless of their own profile status
-    const hasAccess = role === "Admin" || role === "Recruiter" || status === "APPROVED";
+    // Admins always have access, regardless of their own profile status
+    const hasAccess = role === "Admin" || status === "APPROVED";
     
     res.json({ 
       success: true, 
       hasAccess,
-      status: (role === "Admin" || role === "Recruiter") ? "APPROVED" : status,
+      status: role === "Admin" ? "APPROVED" : status,
       message: hasAccess ? "Access granted" : "Profile pending approval"
     });
     

@@ -29,6 +29,7 @@ router.get("/", async (req, res) => {
         p.id AS id,
         p.title AS title,
         p.description AS description,
+        p.nationality AS nationality,
         p.createdAt AS createdAt
       ORDER BY p.title
     `);
@@ -37,6 +38,7 @@ router.get("/", async (req, res) => {
       id: record.get("id"),
       title: record.get("title"),
       description: record.get("description"),
+      nationality: record.get("nationality") || null,
       createdAt: record.get("createdAt")
     }));
 
@@ -74,6 +76,7 @@ router.get("/:policyId", async (req, res) => {
         p.id AS id,
         p.title AS title,
         p.description AS description,
+        p.nationality AS nationality,
         p.createdAt AS createdAt
       `,
       { policyId }
@@ -91,6 +94,7 @@ router.get("/:policyId", async (req, res) => {
       id: record.get("id"),
       title: record.get("title"),
       description: record.get("description"),
+      nationality: record.get("nationality") || null,
       createdAt: record.get("createdAt")
     };
 
@@ -115,7 +119,7 @@ router.get("/:policyId", async (req, res) => {
 ================================ */
 
 router.post("/", async (req, res) => {
-  const { title, description } = req.body;
+  const { title, description, nationality } = req.body;
 
   if (!title || !description) {
     return res.status(400).json({
@@ -137,6 +141,7 @@ router.post("/", async (req, res) => {
         id: $id,
         title: $title,
         description: $description,
+        nationality: $nationality,
         createdAt: $createdAt
       })
       `,
@@ -144,6 +149,7 @@ router.post("/", async (req, res) => {
         id: policyId,
         title: title,
         description: description,
+        nationality: nationality || null,
         createdAt: createdAt
       }
     );
@@ -156,6 +162,7 @@ router.post("/", async (req, res) => {
         id: policyId,
         title: title,
         description: description,
+        nationality: nationality || null,
         createdAt: createdAt
       }
     });
@@ -177,12 +184,12 @@ router.post("/", async (req, res) => {
 
 router.put("/:policyId", async (req, res) => {
   const { policyId } = req.params;
-  const { title, description } = req.body;
+  const { title, description, nationality } = req.body;
 
-  if (!title && !description) {
+  if (!title && !description && !nationality) {
     return res.status(400).json({
       success: false,
-      message: "At least one field (title or description) is required to update"
+      message: "At least one field (title, description, or nationality) is required to update"
     });
   }
 
@@ -202,6 +209,10 @@ router.put("/:policyId", async (req, res) => {
       setQuery += "p.description = $description, ";
       params.description = description;
     }
+    if (nationality !== undefined) {
+      setQuery += "p.nationality = $nationality, ";
+      params.nationality = nationality;
+    }
     
     // Remove trailing comma and space
     setQuery = setQuery.slice(0, -2);
@@ -210,7 +221,7 @@ router.put("/:policyId", async (req, res) => {
       `
       MATCH (p:Policy {id: $policyId})
       SET ${setQuery}
-      RETURN p.id AS id, p.title AS title, p.description AS description
+      RETURN p.id AS id, p.title AS title, p.description AS description, p.nationality AS nationality
       `,
       params
     );
@@ -230,7 +241,8 @@ router.put("/:policyId", async (req, res) => {
       data: {
         id: record.get("id"),
         title: record.get("title"),
-        description: record.get("description")
+        description: record.get("description"),
+        nationality: record.get("nationality") || null
       }
     });
 
