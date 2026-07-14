@@ -10,6 +10,23 @@ const { startDemandAutoExportScheduler } = require('./services/autoExportDemand'
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+
+let initialized = false;
+
+app.use(async (req, res, next) => {
+  if (!initialized) {
+    try {
+      await initializeServices();
+      initialized = true;
+      console.log("✅ Services initialized");
+    } catch (err) {
+      console.error("❌ Initialization failed:", err);
+      return next(err);
+    }
+  }
+  next();
+});
+
 async function initializeServices() {
   console.log('\n🔧 Initializing services...');
   await initAutoExport();
@@ -20,13 +37,11 @@ async function initializeServices() {
 /* ================================
    CORS CONFIG
 ================================ */
-
 const allowedOrigins = [
   "http://localhost:5173",
-  "http://localhost:5173/myuandwe",
   "http://localhost:3000",
-  "https://myuandwe.vercel.app",
-  "https://recruitment-hiring-portal-ibsf.vercel.app"
+  "https://myuandwe-portal.vercel.app",
+  "https://uaw-backend.vercel.app"
 ];
 
 app.use((req, res, next) => {
@@ -161,18 +176,8 @@ app.use((err, req, res, next) => {
    START SERVER
 ================================ */
 
-app.listen(PORT, async () => {
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`${'='.repeat(50)}`);
-  console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
-  console.log(`📄 Swagger JSON: http://localhost:${PORT}/swagger.json`);
-  console.log(`🔍 Debug endpoints: http://localhost:${PORT}/api/debug-endpoints`);
-  console.log(`✅ Test endpoint: http://localhost:${PORT}/api/test`);
-  console.log(`${'='.repeat(50)}\n`);
 
-  await initializeServices();
-  console.log(`✅ All services initialized successfully!\n`);
-});
+
+
 
 module.exports = app;
