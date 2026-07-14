@@ -168,7 +168,7 @@ router.get("/search", async (req, res) => {
 router.post("/", async (req, res) => {
   const { employee_number, employee_name, assets } = req.body;
 
-  console.log("Received payload:", { employee_number, employee_name, assets: assets?.length });
+  // console.log("Received payload:", { employee_number, employee_name, assets: assets?.length });
 
   if (!employee_number || !employee_name || !assets || assets.length === 0) {
     return res.status(400).json({

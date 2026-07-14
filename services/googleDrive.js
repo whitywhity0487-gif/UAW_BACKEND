@@ -23,6 +23,7 @@ const HEALTH_CARD_FOLDER_ID = '1vRQBgV6pMuXdVcVKzqCRJgMQ5L60GzYm'; // For Health
 const EMPLOYEE_TRANSFER_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Relieving Letters
 const REIMBURSEMENT_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Reimbursement Documents
 const PAYSLIP_FOLDER_ID = '10Gp5wXt-x_wGKGiJ_8KbIRuFN9CwNfgh'; // For Employee Payslips
+const NATIONAL_ID_FOLDER_ID = '19tRkAmK8ZPgyvFla8felhozyebw48zRv'; // For China National ID
 
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
@@ -189,6 +190,14 @@ async function uploadCandidateProfileResume(filePath, fileName) {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * Upload National ID document to National ID specific folder
+ */
+async function uploadNationalIdDocument(fileBuffer, originalName, mimeType, userId) {
+  return await uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'national_id', NATIONAL_ID_FOLDER_ID);
+}
+
 /**
  * Upload PAN card image to PAN-specific folder
  */
@@ -624,5 +633,6 @@ module.exports = {
   uploadHealthCard,
   uploadRelievingLetter,
   uploadReimbursementDocument,
-  uploadPayslip
+  uploadPayslip,
+  uploadNationalIdDocument
 };

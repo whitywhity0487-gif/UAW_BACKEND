@@ -25,7 +25,8 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5173/myuandwe",
   "http://localhost:3000",
-  "https://myuandwe.vercel.app"
+  "https://myuandwe.vercel.app",
+  "https://recruitment-hiring-portal-ibsf.vercel.app"
 ];
 
 app.use((req, res, next) => {

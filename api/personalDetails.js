@@ -212,6 +212,7 @@ const RETURN_FIELDS = `
   .aadharDocumentLink,
   .ssnNumber,
   .nationalId,
+  .nationalIdDocumentLink,
   .panNumber,
   .panDocumentLink,
   .tenthCertificateLink,
@@ -397,6 +398,7 @@ router.post("/", (req, res, next) => {
   const uploadMiddleware = upload.fields([
     { name: 'aadharDocument', maxCount: 1 },
     { name: 'panDocument', maxCount: 1 },
+    { name: 'nationalIdDocument', maxCount: 1 },
     { name: 'tenthCertificate', maxCount: 1 },
     { name: 'twelfthCertificate', maxCount: 1 },
     { name: 'resumeDocument', maxCount: 1 },
@@ -465,6 +467,7 @@ router.post("/", (req, res, next) => {
   const files = req.files || {};
   const aadharDocumentFile = files?.aadharDocument?.[0];
   const panFile = files?.panDocument?.[0];
+  const nationalIdDocFile = files?.nationalIdDocument?.[0];
   const tenthCertFile = files?.tenthCertificate?.[0];
   const twelfthCertFile = files?.twelfthCertificate?.[0];
   const resumeFile = files?.resumeDocument?.[0];
@@ -535,6 +538,26 @@ router.post("/", (req, res, next) => {
         return res.status(500).json({
           success: false,
           message: "Failed to upload Aadhar document",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload National ID document to Google Drive
+    let nationalIdDocumentLink = null;
+    if (nationalIdDocFile) {
+      const uploadResult = await googleDrive.uploadNationalIdDocument(
+        nationalIdDocFile.buffer,
+        nationalIdDocFile.originalname,
+        nationalIdDocFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        nationalIdDocumentLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload National ID document",
           error: uploadResult.error
         });
       }
@@ -709,6 +732,7 @@ router.post("/", (req, res, next) => {
         aadharDocumentLink: $aadharDocumentLink,
         ssnNumber: $ssnNumber,
         nationalId: $nationalId,
+        nationalIdDocumentLink: $nationalIdDocumentLink,
         panNumber: $panNumber,
         panDocumentLink: $panDocumentLink,
         tenthCertificateLink: $tenthCertificateLink,
@@ -763,6 +787,7 @@ router.post("/", (req, res, next) => {
         aadharDocumentLink: aadharDocumentLink || null,
         ssnNumber: ssnNumber || "",
         nationalId: nationalId || "",
+        nationalIdDocumentLink: nationalIdDocumentLink || null,
         panNumber: panNumber || "",
         panDocumentLink: panLink || null,
         tenthCertificateLink: tenthCertificateLink || null,
@@ -815,6 +840,7 @@ router.post("/", (req, res, next) => {
       data: result.records[0].get("personalDetails"),
       pid: pidToUse,
       aadharDocumentLink: aadharDocumentLink,
+      nationalIdDocumentLink: nationalIdDocumentLink,
       panDocumentLink: panLink,
       tenthCertificateLink: tenthCertificateLink,
       twelfthCertificateLink: twelfthCertificateLink,
@@ -837,6 +863,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
   const uploadMiddleware = upload.fields([
     { name: 'aadharDocument', maxCount: 1 },
     { name: 'panDocument', maxCount: 1 },
+    { name: 'nationalIdDocument', maxCount: 1 },
     { name: 'tenthCertificate', maxCount: 1 },
     { name: 'twelfthCertificate', maxCount: 1 },
     { name: 'resumeDocument', maxCount: 1 },
@@ -871,6 +898,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
   const files = req.files || {};
   const aadharDocumentFile = files?.aadharDocument?.[0];
   const panFile = files?.panDocument?.[0];
+  const nationalIdDocFile = files?.nationalIdDocument?.[0];
   const tenthCertFile = files?.tenthCertificate?.[0];
   const twelfthCertFile = files?.twelfthCertificate?.[0];
   const resumeFile = files?.resumeDocument?.[0];
@@ -886,9 +914,9 @@ router.put("/resubmit/:userId", (req, res, next) => {
 
     // Check that user's profile status is REJECTED
     const userCheck = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId}) 
-       RETURN p.profileStatus as status, 
+      `MATCH (p:PersonalDetails {userId: $userId})        RETURN p.profileStatus as status, 
               p.aadharDocumentLink as oldAadharDocumentLink,
+              p.nationalIdDocumentLink as oldNationalIdDocumentLink,
               p.panDocumentLink as oldPanLink,
               p.tenthCertificateLink as oldTenthCertLink,
               p.twelfthCertificateLink as oldTwelfthCertLink,
@@ -906,6 +934,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
 
     const currentStatus = userCheck.records[0].get("status");
     let oldAadharDocumentLink = userCheck.records[0].get("oldAadharDocumentLink");
+    let oldNationalIdDocumentLink = userCheck.records[0].get("oldNationalIdDocumentLink") || null;
     let oldPanLink = userCheck.records[0].get("oldPanLink");
     let oldTenthCertLink = userCheck.records[0].get("oldTenthCertLink") || null;
     let oldTwelfthCertLink = userCheck.records[0].get("oldTwelfthCertLink") || null;
@@ -967,6 +996,31 @@ router.put("/resubmit/:userId", (req, res, next) => {
         return res.status(500).json({
           success: false,
           message: "Failed to upload Aadhar document",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload new National ID Document if provided
+    let nationalIdDocumentLink = oldNationalIdDocumentLink;
+    if (nationalIdDocFile) {
+      if (oldNationalIdDocumentLink) {
+        const oldFileId = oldNationalIdDocumentLink.split('/').pop();
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+
+      const uploadResult = await googleDrive.uploadNationalIdDocument(
+        nationalIdDocFile.buffer,
+        nationalIdDocFile.originalname,
+        nationalIdDocFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        nationalIdDocumentLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload National ID document",
           error: uploadResult.error
         });
       }
@@ -1097,7 +1151,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
 
     // Delete existing PersonalDetails node
     await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId}) DELETE p`,
+      `MATCH (p:PersonalDetails {userId: $userId}) DETACH DELETE p`,
       { userId }
     );
 
@@ -1151,6 +1205,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
         aadharDocumentLink: $aadharDocumentLink,
         ssnNumber: $ssnNumber,
         nationalId: $nationalId,
+        nationalIdDocumentLink: $nationalIdDocumentLink,
         panNumber: $panNumber,
         panDocumentLink: $panDocumentLink,
         tenthCertificateLink: $tenthCertificateLink,
@@ -1205,6 +1260,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
         aadharDocumentLink: aadharDocumentLink,
         ssnNumber: ssnNumber || "",
         nationalId: nationalId || "",
+        nationalIdDocumentLink: nationalIdDocumentLink,
         panNumber: panNumber || "",
         panDocumentLink: panLink,
         tenthCertificateLink: tenthCertificateLink,
@@ -1255,6 +1311,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
       data: result.records[0].get("personalDetails"),
       pid: pidToUse,
       aadharDocumentLink: aadharDocumentLink,
+      nationalIdDocumentLink: nationalIdDocumentLink,
       panDocumentLink: panLink,
       tenthCertificateLink: tenthCertificateLink,
       twelfthCertificateLink: twelfthCertificateLink,
@@ -1393,7 +1450,7 @@ router.delete("/:pid", async (req, res) => {
 
     const result = await session.run(
       `MATCH (p:PersonalDetails {pid: $pid})
-       DELETE p
+       DETACH DELETE p
        RETURN COUNT(p) as deleted`,
       { pid }
     );
